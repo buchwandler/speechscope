@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=80", "setuptools-scm>=8,<11", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speechscope"
+dynamic = ["version"]
+description = "Timestamped speech transcription, word alignment, and reference-based speech analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{name = "Holger Nahrstaedt"}]
+keywords = ["speech", "asr", "transcription", "word-error-rate", "timestamps", "audio-quality"]
+dependencies = ["numpy>=1.24", "soundfile>=0.12", "audiosig>=0.1.6"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Topic :: Multimedia :: Sound/Audio", "Typing :: Typed"]
+
+[project.optional-dependencies]
+redux = ["moondream>=2.4.0"]
+dev = ["pytest>=8", "jsonschema>=4", "build>=1.2", "ruff>=0.6", "setuptools-scm>=8,<11"]
+
+[project.scripts]
+speechscope = "speechscope.cli:main"
+
+[project.urls]
+Repository = "https://github.com/buchwandler/speechscope"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["speechscope*"]
+
+[tool.setuptools.package-data]
+speechscope = ["py.typed", "schemas/*.json"]
+
+[tool.setuptools_scm]
+version_file = "speechscope/_version.py"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+fallback_version = "0.1.dev0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["integration: requires real model weights"]
+
+[tool.ruff]
+line-length = 100

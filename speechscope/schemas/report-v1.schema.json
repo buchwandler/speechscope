@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/buchwandler/speechscope/blob/main/speechscope/schemas/report-v1.schema.json",
+  "title": "SpeechScope report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool",
+    "input",
+    "backend",
+    "reference",
+    "transcript",
+    "alignment",
+    "metrics",
+    "evaluation",
+    "diagnostics",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "speechscope" },
+        "version": { "type": "string" }
+      }
+    },
+    "input": {
+      "type": "object",
+      "required": ["audio_path", "duration_s", "sample_rate_hz", "channels"],
+      "properties": {
+        "audio_path": { "type": "string" },
+        "duration_s": { "type": "number", "exclusiveMinimum": 0 },
+        "sample_rate_hz": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "required": ["name", "version", "model", "device"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "device": { "type": ["string", "null"] }
+      }
+    },
+    "reference": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["raw", "normalized", "profile"],
+          "properties": {
+            "raw": { "type": "string" },
+            "normalized": { "type": "string" },
+            "profile": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "transcript": {
+      "type": "object",
+      "required": ["raw", "normalized", "language", "timing_source", "words"],
+      "properties": {
+        "raw": { "type": "string" },
+        "normalized": { "type": "string" },
+        "language": { "type": ["string", "null"] },
+        "timing_source": {
+          "enum": ["native_word", "derived_segment", "unavailable"]
+        },
+        "words": { "type": "array", "items": { "$ref": "#/$defs/word" } }
+      }
+    },
+    "alignment": { "type": "array", "items": { "$ref": "#/$defs/aligned" } },
+    "metrics": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": [
+            "reference_word_count",
+            "hypothesis_word_count",
+            "word_matches",
+            "word_substitutions",
+            "word_deletions",
+            "word_insertions",
+            "wer",
+            "cer",
+            "mer",
+            "wil",
+            "wip",
+            "reference_character_count",
+            "character_substitutions",
+            "character_deletions",
+            "character_insertions",
+            "aligned_reference_words_with_timestamps",
+            "reference_timestamp_coverage_ratio",
+            "hypothesis_timestamp_coverage_ratio",
+            "invalid_timestamp_count",
+            "non_monotonic_timestamp_count",
+            "max_word_end_s",
+            "trailing_audio_s",
+            "processing_time_s",
+            "realtime_factor"
+          ],
+          "properties": {
+            "wer": { "type": "number", "minimum": 0 },
+            "cer": { "type": "number", "minimum": 0 },
+            "mer": { "type": "number", "minimum": 0 },
+            "wil": { "type": "number", "minimum": 0 },
+            "wip": { "type": "number", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["status", "rules"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "review", "not_evaluated"] },
+        "rules": { "type": "array" }
+      }
+    },
+    "diagnostics": { "type": "array" },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "processing_time_s",
+        "realtime_factor",
+        "audio_transformations"
+      ],
+      "properties": {
+        "processing_time_s": { "type": "number", "minimum": 0 },
+        "realtime_factor": { "type": "number", "minimum": 0 },
+        "audio_transformations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nullableTime": { "type": ["number", "null"], "minimum": 0 },
+    "word": {
+      "type": "object",
+      "required": ["text", "start_s", "end_s", "confidence"],
+      "properties": {
+        "text": { "type": "string" },
+        "start_s": { "$ref": "#/$defs/nullableTime" },
+        "end_s": { "$ref": "#/$defs/nullableTime" },
+        "confidence": { "type": ["number", "null"] }
+      }
+    },
+    "aligned": {
+      "type": "object",
+      "required": [
+        "operation",
+        "reference_index",
+        "reference_text",
+        "hypothesis_index",
+        "hypothesis_text",
+        "start_s",
+        "end_s",
+        "timing_source",
+        "confidence"
+      ],
+      "properties": {
+        "operation": {
+          "enum": ["match", "substitution", "deletion", "insertion"]
+        },
+        "reference_index": { "type": ["integer", "null"], "minimum": 0 },
+        "reference_text": { "type": ["string", "null"] },
+        "hypothesis_index": { "type": ["integer", "null"], "minimum": 0 },
+        "hypothesis_text": { "type": ["string", "null"] },
+        "start_s": { "$ref": "#/$defs/nullableTime" },
+        "end_s": { "$ref": "#/$defs/nullableTime" },
+        "timing_source": { "type": "string" },
+        "confidence": { "type": ["number", "null"] }
+      }
+    }
+  }
+}
