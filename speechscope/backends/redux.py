@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import importlib.metadata
 from collections.abc import Mapping
+from contextlib import suppress
 
-from ..errors import BackendUnavailableError, TranscriptionError
+from ..errors import BackendUnavailableError, TranscriptionError, UnsupportedBackendOptionError
 from ..types import AudioInput, BackendInfo, TimedWord, TranscriptionResult
 
 DEFAULT_MODEL = "moondream/parakeet-redux"
@@ -34,9 +35,13 @@ def info() -> BackendInfo:
 
 class ReduxTranscriber:
     def __init__(self, *, device: str = "cpu", model: str | None = None, cache_dir=None):
+        if model is not None and model != DEFAULT_MODEL:
+            raise UnsupportedBackendOptionError(
+                f"Redux supports only model {DEFAULT_MODEL!r}, not {model!r}"
+            )
+        if device not in ("cpu", "cuda", "mps", "auto"):
+            raise UnsupportedBackendOptionError(f"Redux unsupported device {device!r}")
         if cache_dir is not None:
-            from ..errors import UnsupportedBackendOptionError
-
             raise UnsupportedBackendOptionError(
                 "Redux does not expose a cache-dir option via Photon; configure its cache externally"
             )
@@ -47,14 +52,21 @@ class ReduxTranscriber:
                 "Install Redux with: pip install 'speechscope[redux]'"
             ) from exc
         self._device = device
-        self._model = model or DEFAULT_MODEL
+        self._model = DEFAULT_MODEL if model is None else model
+        manager = None
         try:
             if device == "auto":
-                self._manager = moondream.photon(self._model)
+                manager = moondream.photon(self._model)
             else:
-                self._manager = moondream.photon(self._model, device=device)
-            self._speech = self._manager.__enter__()
+                manager = moondream.photon(self._model, device=device)
+            self._manager = manager
+            self._speech = manager.__enter__()
         except Exception as exc:
+            if manager is not None:
+                # Preserve initialization failure if best-effort cleanup also fails.
+                with suppress(Exception):
+                    manager.__exit__(type(exc), exc, exc.__traceback__)
+            self._manager = None
             raise BackendUnavailableError(
                 f"Could not initialize Redux on device {device}: {exc}"
             ) from exc
@@ -64,8 +76,6 @@ class ReduxTranscriber:
 
     def transcribe(self, audio: AudioInput, *, language: str | None = None) -> TranscriptionResult:
         if language is not None:
-            from ..errors import UnsupportedBackendOptionError
-
             raise UnsupportedBackendOptionError(
                 "Redux detects language automatically; --language is unsupported"
             )
@@ -86,8 +96,8 @@ class ReduxTranscriber:
                     words.append(
                         TimedWord(
                             token,
-                            float(start) if start is not None else None,
-                            float(end) if end is not None else None,
+                            start,
+                            end,
                             _get(word, "probability", None),
                         )
                     )
@@ -100,8 +110,8 @@ class ReduxTranscriber:
                     words.append(
                         TimedWord(
                             token,
-                            float(start) if start is not None else None,
-                            float(end) if end is not None else None,
+                            start,
+                            end,
                         )
                     )
             return TranscriptionResult(

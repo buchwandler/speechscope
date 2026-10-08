@@ -5,7 +5,12 @@ from __future__ import annotations
 import importlib.metadata
 from collections.abc import Callable
 
-from .errors import BackendNotFoundError, BackendUnavailableError, UnsupportedBackendOptionError
+from .errors import (
+    BackendNotFoundError,
+    BackendUnavailableError,
+    SpeechScopeError,
+    UnsupportedBackendOptionError,
+)
 from .types import BackendInfo
 
 # Explicit registration overrides neither another explicit registration nor a plugin.
@@ -55,19 +60,34 @@ def backend_info(name: str) -> BackendInfo:
 
 def open_backend(name: str, *, device: str, model: str | None, cache_dir=None):
     if name == "redux":
-        from .backends.redux import ReduxTranscriber
+        from .backends.redux import DEFAULT_MODEL, ReduxTranscriber
 
+        if model is not None and model != DEFAULT_MODEL:
+            raise UnsupportedBackendOptionError(
+                f"Redux supports only model {DEFAULT_MODEL!r}, not {model!r}"
+            )
         if device not in ("cpu", "cuda", "mps", "auto"):
             raise UnsupportedBackendOptionError(f"Redux unsupported device {device!r}")
         return ReduxTranscriber(device=device, model=model, cache_dir=cache_dir)
     if name in _FACTORIES:
-        return _FACTORIES[name](device=device, model=model, cache_dir=cache_dir)
+        try:
+            return _FACTORIES[name](device=device, model=model, cache_dir=cache_dir)
+        except SpeechScopeError:
+            raise
+        except Exception as exc:
+            raise BackendUnavailableError(f"Backend {name!r} factory failed: {exc}") from exc
     for entry in _entries():
         if entry.name == name:
             try:
                 return entry.load()(device=device, model=model, cache_dir=cache_dir)
+            except SpeechScopeError:
+                raise
             except ImportError as exc:
                 raise BackendUnavailableError(
                     f"Backend plugin {name!r} missing dependencies"
+                ) from exc
+            except Exception as exc:
+                raise BackendUnavailableError(
+                    f"Backend plugin {name!r} factory failed: {exc}"
                 ) from exc
     raise BackendNotFoundError(f"Unknown backend {name!r}")

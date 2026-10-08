@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from . import __version__
 from .api import analyze, transcribe_report
 from .errors import (
+    AlignmentTooLargeError,
     BackendNotFoundError,
     BackendUnavailableError,
     ExportError,
@@ -23,6 +25,7 @@ from .errors import (
 from .evaluation import parse_policy
 from .exports import write_captions, write_words
 from .registry import available_backends, backend_info
+from .timing import caption_timestamp_error
 from .types import VerificationRequest
 
 
@@ -98,11 +101,28 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "doctor":
             info = backend_info(args.backend)
-            if info.name == "redux" and info.version is None:
-                raise BackendUnavailableError(
-                    "Install Redux with: pip install 'speechscope[redux]'"
+            if info.name == "redux":
+                if info.version is None:
+                    raise BackendUnavailableError(
+                        "Install Redux with: pip install 'speechscope[redux]'"
+                    )
+                match = re.match(r"^(\d+)\.(\d+)\.(\d+)", info.version)
+                version = tuple(map(int, match.groups())) if match else ()
+                if version < (2, 4, 1):
+                    raise BackendUnavailableError(
+                        f"Moondream {info.version!r} does not satisfy Redux's >=2.4.1 minimum; "
+                        "upgrade with: pip install --upgrade 'speechscope[redux]'"
+                    )
+                print(
+                    f"Backend redux: dependency available (Moondream {info.version}); "
+                    "metadata-only preflight, not model/device readiness. "
+                    "Photon is not initialized and model weights are not accessed."
                 )
-            print(f"Backend {info.name}: dependency available; no model initialized/downloaded")
+            else:
+                print(
+                    f"Backend {info.name}: dependency metadata preflight passed; "
+                    "model readiness is not tested."
+                )
             return 0
         if args.command == "metrics":
             # Audio-based quality metrics belong to audiosig and are not part of v0.1.
@@ -157,11 +177,10 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
             )
         # Validate all export preconditions before writing any result artifact.
-        if (args.srt or args.vtt) and (
-            not result.transcription.words
-            or any(w.start_s is None or w.end_s is None for w in result.transcription.words)
-        ):
-            raise ExportError("Cannot export captions without complete word timestamps")
+        if args.srt or args.vtt:
+            error = caption_timestamp_error(result.transcription.words, result.audio_duration_s)
+            if error:
+                raise ExportError(error)
         if args.words:
             write_words(result, args.words)
         if args.srt:
@@ -192,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result.diagnostics, indent=2), file=sys.stderr)
         return 1 if result.evaluation["status"] == "fail" else 0
     except (
+        AlignmentTooLargeError,
         InvalidAudioError,
         InvalidReferenceError,
         InvalidThresholdPolicyError,

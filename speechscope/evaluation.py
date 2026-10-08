@@ -66,6 +66,8 @@ def evaluate(metrics: VerificationMetrics, policy: ThresholdPolicy | None) -> di
                 "pass" if (observed <= limit if op == "max" else observed >= limit) else "fail"
             )
         rules.append({"name": key, "observed": observed, "expected": limit, "status": outcome})
+    if not rules:
+        return {"status": "not_evaluated", "rules": []}
     status = (
         "fail"
         if any(r["status"] == "fail" for r in rules)

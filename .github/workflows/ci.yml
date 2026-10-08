@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_real_redux:
+        description: Run CPU inference on the configured self-hosted, rights-cleared fixture
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q -m "not integration"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m compileall -q speechscope
+      - run: python -c 'import json; from jsonschema import Draft202012Validator; Draft202012Validator.check_schema(json.load(open("speechscope/schemas/report-v1.schema.json")))'
+
+  release-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Build staged 0.1.0 artifacts and validate metadata
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: "0.1.0"
+        run: |
+          python -m build
+          python -m twine check dist/*
+          WHEEL=$(printf '%s\n' dist/*.whl)
+          SDIST=$(printf '%s\n' dist/*.tar.gz)
+          python -m venv /tmp/speechscope-wheel
+          /tmp/speechscope-wheel/bin/python -m pip install "$WHEEL"
+          /tmp/speechscope-wheel/bin/python -c 'import importlib.metadata,pathlib,speechscope; assert importlib.metadata.version("speechscope")==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file()'
+          /tmp/speechscope-wheel/bin/speechscope --version
+          /tmp/speechscope-wheel/bin/speechscope metrics list
+          /tmp/speechscope-wheel/bin/speechscope backends list --format json
+          python -m venv /tmp/speechscope-sdist
+          /tmp/speechscope-sdist/bin/python -m pip install "$SDIST"
+          /tmp/speechscope-sdist/bin/python -c 'import importlib.metadata,pathlib,speechscope; assert importlib.metadata.version("speechscope")==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file()'
+          /tmp/speechscope-sdist/bin/speechscope --version
+          /tmp/speechscope-sdist/bin/speechscope metrics list
+          /tmp/speechscope-sdist/bin/speechscope backends list --format json
+
+  real-redux-cpu:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_real_redux }}
+    runs-on: [self-hosted, speechscope-redux]
+    env:
+      SPEECHSCOPE_RUN_REDUX_INTEGRATION: "1"
+      SPEECHSCOPE_REDUX_FIXTURE: ${{ secrets.SPEECHSCOPE_REDUX_FIXTURE }}
+      SPEECHSCOPE_REDUX_REFERENCE: ${{ secrets.SPEECHSCOPE_REDUX_REFERENCE }}
+      SPEECHSCOPE_REDUX_FIXTURE_LICENSE: ${{ secrets.SPEECHSCOPE_REDUX_FIXTURE_LICENSE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[redux,dev]"
+      - run: python -m pytest -q -m integration tests/test_redux.py

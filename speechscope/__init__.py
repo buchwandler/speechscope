@@ -13,6 +13,7 @@ except ImportError:  # source checkout, before SCM has generated version module
 from .api import Verifier, analyze, transcribe, verify
 from .backends.protocol import SpeechTranscriber
 from .errors import (
+    AlignmentTooLargeError,
     BackendNotFoundError,
     BackendUnavailableError,
     ExportError,
@@ -38,6 +39,7 @@ from .types import (
 
 __all__ = [
     "AlignedWord",
+    "AlignmentTooLargeError",
     "AudioInput",
     "BackendInfo",
     "BackendNotFoundError",

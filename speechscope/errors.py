@@ -13,6 +13,10 @@ class InvalidReferenceError(SpeechScopeError):
     pass
 
 
+class AlignmentTooLargeError(SpeechScopeError):
+    """The requested text alignment exceeds its configured work budget."""
+
+
 class BackendNotFoundError(SpeechScopeError):
     pass
 

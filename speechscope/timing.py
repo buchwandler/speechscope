@@ -9,6 +9,39 @@ from .normalize import normalize
 from .types import AlignedWord, TimedWord, TranscriptionResult
 
 
+def caption_timestamp_error(words: tuple[TimedWord, ...], duration_s: float) -> str | None:
+    """Return why word timestamps cannot be exported as chronological captions.
+
+    Starts must be non-decreasing; overlapping words and equal/zero-duration times
+    remain valid. Individual intervals must be finite, ordered, nonnegative, and
+    within the source audio (with the same 50 ms tolerance used by inspection).
+    """
+    if not words:
+        return "Cannot export captions: word timestamps are unavailable"
+    previous_start = None
+    for index, word in enumerate(words):
+        start, end = word.start_s, word.end_s
+        valid = (
+            start is not None
+            and end is not None
+            and all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in (start, end)
+            )
+            and start >= 0
+            and start <= end
+            and end <= duration_s + 0.05
+        )
+        if not valid:
+            return f"Cannot export captions: invalid timestamp for word {index}"
+        if previous_start is not None and start < previous_start:
+            return f"Cannot export captions: non-monotonic timestamp at word {index}"
+        previous_start = start
+    return None
+
+
 def inspected_words(transcript: TranscriptionResult, duration_s: float):
     """Return words with invalid timestamps nulled and structured warnings."""
     cleaned: list[TimedWord] = []

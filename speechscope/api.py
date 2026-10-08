@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Self
 
 from .audio import load_wav
-from .errors import InvalidReferenceError, UnsupportedBackendOptionError
-from .evaluation import evaluate
+from .contracts import validate_transcription_result
+from .errors import (
+    BackendUnavailableError,
+    InvalidReferenceError,
+    InvalidThresholdPolicyError,
+    SpeechScopeError,
+    TranscriptionError,
+    UnsupportedBackendOptionError,
+)
+from .evaluation import evaluate, parse_policy
 from .metrics import char_rates, edit_path, word_rates
 from .normalize import normalize
 from .registry import open_backend
 from .timing import inspected_words, project_alignment, token_timing_map
 from .types import (
+    ThresholdPolicy,
     TranscriptionResult,
     VerificationMetrics,
     VerificationRequest,
@@ -43,18 +52,35 @@ class Verifier:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            if exc_type is None:
+                raise
+        return False
 
     def close(self) -> None:
         if self._backend is not None:
             backend, self._backend = self._backend, None
-            backend.close()
+            try:
+                backend.close()
+            except SpeechScopeError:
+                raise
+            except Exception as exc:
+                raise TranscriptionError(f"Backend {self.backend} failed to close: {exc}") from exc
 
     def _transcribe(self, audio, language: str | None):
         if self._backend is None:
             raise RuntimeError("Use Verifier as a context manager")
         # Backend capability is checked on live instance, so explicit plugins can advertise language.
-        info = self._backend.info()
+        try:
+            info = self._backend.info()
+        except SpeechScopeError:
+            raise
+        except Exception as exc:
+            raise BackendUnavailableError(
+                f"Backend {self.backend} capability inspection failed: {exc}"
+            ) from exc
         if language is not None and not info.supports_language_hint:
             raise UnsupportedBackendOptionError(
                 f"Backend {self.backend} does not support --language"
@@ -67,7 +93,13 @@ class Verifier:
             raise UnsupportedBackendOptionError(
                 f"Backend {self.backend} does not support device {self.device}"
             )
-        outcome = self._backend.transcribe(audio, language=language)
+        try:
+            outcome = self._backend.transcribe(audio, language=language)
+        except SpeechScopeError:
+            raise
+        except Exception as exc:
+            raise TranscriptionError(f"Backend {self.backend} transcription failed: {exc}") from exc
+        outcome = validate_transcription_result(outcome)
         words, warnings, invalid, nonmono = inspected_words(outcome, audio.duration_s)
         normalized = replace(outcome, words=words, duration_s=audio.duration_s)
         if not outcome.text.strip():
@@ -76,15 +108,21 @@ class Verifier:
 
     def transcribe(self, audio: Path | str, *, language: str | None = None) -> TranscriptionResult:
         loaded = load_wav(audio)
+        return self._transcribe_loaded(loaded, language)
+
+    def _transcribe_loaded(self, loaded, language: str | None) -> TranscriptionResult:
         transcript, _, _, _ = self._transcribe(loaded, language)
         return transcript
 
     def analyze(self, request: VerificationRequest) -> VerificationResult:
-        started = perf_counter()
         loaded = load_wav(request.audio)
-        normalized_reference = normalize(request.reference_text, request.normalization)
-        if not normalized_reference:
-            raise InvalidReferenceError("Reference is empty after normalization")
+        normalized_reference = _validate_analysis_inputs(request)
+        return self._analyze_loaded(request, loaded, normalized_reference)
+
+    def _analyze_loaded(
+        self, request: VerificationRequest, loaded, normalized_reference: str
+    ) -> VerificationResult:
+        started = perf_counter()
         ref_tokens = normalized_reference.split()
         transcript, diagnostics, invalid, nonmono = self._transcribe(loaded, request.language)
         normalized_transcript = normalize(transcript.text, request.normalization)
@@ -153,14 +191,35 @@ class Verifier:
         )
 
 
+def _validate_analysis_inputs(request: VerificationRequest) -> str:
+    if not isinstance(request.reference_text, str):
+        raise InvalidReferenceError("Reference text must be a string")
+    try:
+        normalized_reference = normalize(request.reference_text, request.normalization)
+    except TypeError as exc:
+        raise InvalidReferenceError("Reference text must be a string") from exc
+    if not normalized_reference:
+        raise InvalidReferenceError("Reference is empty after normalization")
+    if request.thresholds is not None:
+        if not isinstance(request.thresholds, ThresholdPolicy):
+            raise InvalidThresholdPolicyError("Thresholds must be a ThresholdPolicy")
+        values = {
+            field.name: getattr(request.thresholds, field.name) for field in fields(ThresholdPolicy)
+        }
+        parse_policy(values)
+    return normalized_reference
+
+
 def analyze(request: VerificationRequest) -> VerificationResult:
+    loaded = load_wav(request.audio)
+    normalized_reference = _validate_analysis_inputs(request)
     with Verifier(
         backend=request.backend,
         device=request.device,
         model=request.model,
         cache_dir=request.cache_dir,
     ) as session:
-        return session.analyze(request)
+        return session._analyze_loaded(request, loaded, normalized_reference)
 
 
 def verify(request: VerificationRequest) -> VerificationResult:
@@ -177,8 +236,9 @@ def transcribe(
     model: str | None = None,
     cache_dir=None,
 ) -> TranscriptionResult:
+    loaded = load_wav(audio)
     with Verifier(backend=backend, device=device, model=model, cache_dir=cache_dir) as session:
-        return session.transcribe(audio, language=language)
+        return session._transcribe_loaded(loaded, language)
 
 
 def transcribe_report(
@@ -190,11 +250,12 @@ def transcribe_report(
     model: str | None = None,
     cache_dir=None,
 ) -> VerificationResult:
-    started = perf_counter()
+    loaded = load_wav(audio)
     with Verifier(backend=backend, device=device, model=model, cache_dir=cache_dir) as session:
-        loaded = load_wav(audio)
+        started = perf_counter()
         transcript, warnings, _, _ = session._transcribe(loaded, language)
-    elapsed = perf_counter() - started
+        normalized_transcript = normalize(transcript.text)
+        elapsed = perf_counter() - started
     return VerificationResult(
         audio=loaded.path,
         audio_duration_s=loaded.duration_s,
@@ -204,7 +265,7 @@ def transcribe_report(
         transcription=transcript,
         reference_text=None,
         normalized_reference=None,
-        normalized_transcript=normalize(transcript.text),
+        normalized_transcript=normalized_transcript,
         normalization=None,
         aligned_words=(),
         metrics=None,

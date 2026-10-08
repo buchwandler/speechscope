@@ -1,0 +1,36 @@
+name: Redux SDK contract
+
+on:
+  push:
+    paths:
+      - "speechscope/**"
+      - "tests/test_redux.py"
+      - "pyproject.toml"
+      - ".github/workflows/redux-sdk-compat.yml"
+  pull_request:
+    paths:
+      - "speechscope/**"
+      - "tests/test_redux.py"
+      - "pyproject.toml"
+      - ".github/workflows/redux-sdk-compat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        moondream-version: ["2.4.1", "2.6.1"]
+    env:
+      SPEECHSCOPE_EXPECTED_MOONDREAM_VERSION: ${{ matrix.moondream-version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]" "moondream==${{ matrix.moondream-version }}"
+      - run: python -m pytest -q -m "not integration" tests/test_redux.py

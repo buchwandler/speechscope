@@ -106,6 +106,22 @@
             "realtime_factor"
           ],
           "properties": {
+            "reference_timestamp_coverage_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Fraction of reference alignment positions with usable ASR timestamps; timestamped substitutions count and do not imply correctness or forced alignment."
+            },
+            "processing_time_s": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Processing wall time after WAV loading and backend initialization; excludes model initialization, WAV loading, and backend teardown."
+            },
+            "realtime_factor": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Processing wall time divided by audio duration; not end-to-end first-call latency."
+            },
             "wer": { "type": "number", "minimum": 0 },
             "cer": { "type": "number", "minimum": 0 },
             "mer": { "type": "number", "minimum": 0 },
@@ -132,11 +148,49 @@
         "audio_transformations"
       ],
       "properties": {
-        "processing_time_s": { "type": "number", "minimum": 0 },
-        "realtime_factor": { "type": "number", "minimum": 0 },
+        "processing_time_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Processing after WAV loading and backend initialization, excluding model initialization and teardown."
+        },
+        "realtime_factor": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Processing wall time divided by audio duration; not end-to-end first-call latency."
+        },
         "audio_transformations": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string" },
+          "description": "Transformations applied to the loader's mono sample representation; these are not necessarily consumed by the backend."
+        },
+        "backend_audio_input": {
+          "type": "object",
+          "required": [
+            "kind",
+            "selection",
+            "path",
+            "sample_rate_hz",
+            "source_channels",
+            "loader_sample_transformations",
+            "transformations_on_backend_input"
+          ],
+          "properties": {
+            "kind": { "enum": ["encoded_wav_path", "audio_input"] },
+            "selection": { "enum": ["encoded_path", "provider_defined"] },
+            "path": { "type": "string" },
+            "sample_rate_hz": { "type": "integer", "minimum": 1 },
+            "source_channels": { "type": "integer", "minimum": 1 },
+            "loader_sample_transformations": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "transformations_on_backend_input": {
+              "oneOf": [
+                { "type": "array", "items": { "type": "string" } },
+                { "type": "null" }
+              ]
+            }
+          }
         }
       }
     }

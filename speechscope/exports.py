@@ -7,6 +7,7 @@ import io
 from pathlib import Path
 
 from .errors import ExportError
+from .timing import caption_timestamp_error
 from .types import VerificationResult, atomic_write
 
 
@@ -67,8 +68,9 @@ def write_captions(
     if kind not in ("srt", "vtt"):
         raise ExportError(f"Unknown caption format {kind}")
     words = result.transcription.words
-    if not words or any(w.start_s is None or w.end_s is None for w in words):
-        raise ExportError("Cannot export captions: word timestamps are unavailable")
+    error = caption_timestamp_error(words, result.audio_duration_s)
+    if error:
+        raise ExportError(error)
     captions = []
     current = []
     for word in words:

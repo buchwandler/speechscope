@@ -142,6 +142,17 @@ class VerificationResult:
     def to_dict(self) -> dict:
         from . import __version__
 
+        redux_input = self.transcription.backend == "redux"
+        backend_audio_input = {
+            "kind": "encoded_wav_path" if redux_input else "audio_input",
+            "selection": "encoded_path" if redux_input else "provider_defined",
+            "path": str(self.audio),
+            "sample_rate_hz": self.audio_sample_rate,
+            "source_channels": self.audio_channels,
+            "loader_sample_transformations": list(self.audio_transforms),
+            "transformations_on_backend_input": [] if redux_input else None,
+        }
+
         result = {
             "schema_version": "1",
             "tool": {"name": "speechscope", "version": __version__},
@@ -179,6 +190,7 @@ class VerificationResult:
                 "processing_time_s": self.processing_time_s,
                 "realtime_factor": self.realtime_factor,
                 "audio_transformations": list(self.audio_transforms),
+                "backend_audio_input": backend_audio_input,
             },
         }
         return result
