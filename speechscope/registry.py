@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 from collections.abc import Callable
 
@@ -9,12 +10,13 @@ from .errors import (
     BackendNotFoundError,
     BackendUnavailableError,
     SpeechScopeError,
-    UnsupportedBackendOptionError,
 )
 from .types import BackendInfo
 
 # Explicit registration overrides neither another explicit registration nor a plugin.
 _FACTORIES: dict[str, Callable[..., object]] = {}
+
+_BUILTIN_NAMES = ("redux", "whispercpp")
 
 
 def register_backend(name: str, factory: Callable[..., object]) -> None:
@@ -22,12 +24,12 @@ def register_backend(name: str, factory: Callable[..., object]) -> None:
 
     Factories receive ``device``, ``model`` and ``cache_dir`` keyword options
     and must return an object implementing ``info()``, ``transcribe(audio,
-    language=None)`` and ``close()``. Duplicate names and reserved ``redux`` are
+    language=None)`` and ``close()``. Duplicate names and reserved built-in names are
     rejected; use an entry point for an installed plugin.
     """
     if (
         not name
-        or name == "redux"
+        or name in _BUILTIN_NAMES
         or name in _FACTORIES
         or any(ep.name == name for ep in _entries())
     ):
@@ -39,8 +41,12 @@ def _entries():
     return tuple(importlib.metadata.entry_points(group="speechscope.backends"))
 
 
+def _builtin_module(name: str):
+    return importlib.import_module(f".backends.{name}", package=__package__)
+
+
 def _names() -> tuple[str, ...]:
-    names = ["redux", *_FACTORIES, *(ep.name for ep in _entries())]
+    names = [*_BUILTIN_NAMES, *_FACTORIES, *(ep.name for ep in _entries())]
     if len(names) != len(set(names)):
         raise BackendUnavailableError(
             "Duplicate backend entry-point names; remove conflicting plugins"
@@ -50,11 +56,11 @@ def _names() -> tuple[str, ...]:
 
 def available_backends() -> tuple[BackendInfo, ...]:
     """Return discoverable backend metadata without opening models or weights."""
-    # Plugin capability inspection may require loading plugin metadata; never open a model.
-    from .backends.redux import info
-
+    # Built-in adapters expose static info(); discovery never probes executables.
     return tuple(
-        info() if name == "redux" else BackendInfo(name, None, False, False, False, ())
+        _builtin_module(name).info()
+        if name in _BUILTIN_NAMES
+        else BackendInfo(name, None, False, False, False, ())
         for name in _names()
     )
 
@@ -67,16 +73,16 @@ def backend_info(name: str) -> BackendInfo:
 
 
 def open_backend(name: str, *, device: str, model: str | None, cache_dir=None):
-    if name == "redux":
-        from .backends.redux import DEFAULT_MODEL, ReduxTranscriber
-
-        if model is not None and model != DEFAULT_MODEL:
-            raise UnsupportedBackendOptionError(
-                f"Redux supports only model {DEFAULT_MODEL!r}, not {model!r}"
-            )
-        if device not in ("cpu", "cuda", "mps", "auto"):
-            raise UnsupportedBackendOptionError(f"Redux unsupported device {device!r}")
-        return ReduxTranscriber(device=device, model=model, cache_dir=cache_dir)
+    # Detect entry-point collisions with reserved built-ins before dispatch.
+    _names()
+    if name in _BUILTIN_NAMES:
+        try:
+            factory = _builtin_module(name).create_backend
+            return factory(device=device, model=model, cache_dir=cache_dir)
+        except SpeechScopeError:
+            raise
+        except Exception as exc:
+            raise BackendUnavailableError(f"Backend {name!r} factory failed: {exc}") from exc
     if name in _FACTORIES:
         try:
             return _FACTORIES[name](device=device, model=model, cache_dir=cache_dir)

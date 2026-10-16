@@ -60,7 +60,8 @@ markers = ["integration: requires real model weights"]
 
 [tool.ruff]
 line-length = 100
-extend-exclude = ["SPEECHSCOPE_V0_1_0_COMPARISON_AND_RELEASE_BRIEF.md"]
+extend-exclude = [
+]
 
 
 [tool.mypy]

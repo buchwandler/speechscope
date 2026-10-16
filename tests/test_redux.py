@@ -178,13 +178,14 @@ def test_redux_stereo_path_and_loader_provenance_agree(monkeypatch, tmp_path):
     assert provenance["backend_audio_input"] == {
         "kind": "encoded_wav_path",
         "selection": "encoded_path",
-        "path": str(path),
+        "source_path": str(path),
         "sample_rate_hz": 24000,
-        "source_channels": 2,
+        "channels": 2,
+        "sample_format": None,
         "loader_sample_transformations": ["average_channels"],
         "transformations_on_backend_input": [],
     }
-    assert report.to_dict()["provenance"]["backend_audio_input"]["path"] == str(path)
+    assert report.to_dict()["provenance"]["backend_audio_input"]["source_path"] == str(path)
     schema = json.loads(
         (
             Path(__file__).parents[1] / "speechscope" / "schemas" / "report-v1.schema.json"

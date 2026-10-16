@@ -28,6 +28,7 @@ from .registry import available_backends, backend_info, register_backend
 from .types import (
     AlignedWord,
     AudioInput,
+    BackendAudioInput,
     BackendInfo,
     ThresholdPolicy,
     TimedWord,
@@ -41,6 +42,7 @@ __all__ = [
     "AlignedWord",
     "AlignmentTooLargeError",
     "AudioInput",
+    "BackendAudioInput",
     "BackendInfo",
     "BackendNotFoundError",
     "BackendUnavailableError",

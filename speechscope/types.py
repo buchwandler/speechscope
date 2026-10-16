@@ -49,6 +49,18 @@ class BackendInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class BackendAudioInput:
+    """Provider-neutral description of the audio representation consumed by ASR."""
+
+    kind: Literal["encoded_wav_path", "generated_wav_path", "audio_input"]
+    selection: Literal["encoded_path", "canonicalized_wav", "provider_defined"]
+    sample_rate_hz: int
+    channels: int
+    sample_format: str | None
+    transformations: tuple[str, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptionResult:
     """Transcript plus ASR timing and provenance from one backend call.
 
@@ -65,6 +77,9 @@ class TranscriptionResult:
     timing_source: Literal["native_word", "derived_segment", "unavailable"] = "unavailable"
     backend_version: str | None = None
     device: str | None = None
+
+    backend_audio_input: BackendAudioInput | None = None
+    diagnostics: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,16 +207,33 @@ class VerificationResult:
     def to_dict(self) -> dict:
         from . import __version__
 
-        redux_input = self.transcription.backend == "redux"
-        backend_audio_input = {
-            "kind": "encoded_wav_path" if redux_input else "audio_input",
-            "selection": "encoded_path" if redux_input else "provider_defined",
-            "path": str(self.audio),
-            "sample_rate_hz": self.audio_sample_rate,
-            "source_channels": self.audio_channels,
-            "loader_sample_transformations": list(self.audio_transforms),
-            "transformations_on_backend_input": [] if redux_input else None,
-        }
+        backend_audio = self.transcription.backend_audio_input
+        if backend_audio is None:
+            backend_audio_input = {
+                "kind": "audio_input",
+                "selection": "provider_defined",
+                "source_path": str(self.audio),
+                "sample_rate_hz": self.audio_sample_rate,
+                "channels": self.audio_channels,
+                "sample_format": None,
+                "loader_sample_transformations": list(self.audio_transforms),
+                "transformations_on_backend_input": None,
+            }
+        else:
+            backend_audio_input = {
+                "kind": backend_audio.kind,
+                "selection": backend_audio.selection,
+                "source_path": str(self.audio),
+                "sample_rate_hz": backend_audio.sample_rate_hz,
+                "channels": backend_audio.channels,
+                "sample_format": backend_audio.sample_format,
+                "loader_sample_transformations": list(self.audio_transforms),
+                "transformations_on_backend_input": (
+                    None
+                    if backend_audio.transformations is None
+                    else list(backend_audio.transformations)
+                ),
+            }
 
         result = {
             "schema_version": "1",

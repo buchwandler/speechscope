@@ -101,6 +101,7 @@ class Verifier:
             raise TranscriptionError(f"Backend {self.backend} transcription failed: {exc}") from exc
         outcome = validate_transcription_result(outcome)
         words, warnings, invalid, nonmono = inspected_words(outcome, audio.duration_s)
+        warnings = list(outcome.diagnostics) + warnings
         normalized = replace(outcome, words=words, duration_s=audio.duration_s)
         if not outcome.text.strip():
             warnings.append({"code": "empty_transcript"})

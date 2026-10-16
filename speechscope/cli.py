@@ -120,6 +120,19 @@ def main(argv: list[str] | None = None) -> int:
                     "metadata-only preflight, not model/device readiness. "
                     "Photon is not initialized and model weights are not accessed."
                 )
+            elif info.name == "whispercpp":
+                from .backends.whispercpp import probe_executable
+
+                executable, whisper_version = probe_executable()
+                version_note = (
+                    f" (whisper.cpp {whisper_version})"
+                    if whisper_version
+                    else " (version unavailable)"
+                )
+                print(
+                    f"Backend whispercpp: executable available{version_note} at {executable}; "
+                    "metadata-only preflight. Model weights are not accessed."
+                )
             else:
                 print(
                     f"Backend {info.name}: dependency metadata preflight passed; "

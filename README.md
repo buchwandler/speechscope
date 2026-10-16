@@ -16,13 +16,17 @@ For Parakeet Redux transcription:
 pip install 'speechscope[redux]'
 ```
 
-Python 3.11+ is supported. The optional Redux integration uses Moondream/Parakeet Redux; its first inference may download model weights to Moondream's managed cache. Import and backend discovery do not initialize a model.
+For the external whisper.cpp backend, install whisper.cpp separately and provide a local model; SpeechScope does not download weights. See [whisper.cpp integration](docs/whispercpp-integration.md) for build, environment, and usage instructions. SpeechScope prepares mono 16 kHz PCM16 WAV internally, so FFmpeg is not required.
+
+Python 3.11+ is supported. The optional Redux integration uses Moondream/Parakeet Redux; its first inference may download model weights to Moondream's managed cache. The `whispercpp` backend uses an external `whisper-cli` and a user-provided local model, with no automatic model downloads. Import and backend discovery do not initialize a model or execute the CLI.
 
 ## CLI
 
 ```bash
 speechscope backends list --format json
 speechscope doctor --backend redux
+speechscope doctor --backend whispercpp
+speechscope transcribe speech.wav --backend whispercpp --model /path/to/ggml-model.bin --device cpu --format json
 speechscope metrics list
 speechscope transcribe speech.wav --backend redux --format json --srt speech.srt
 speechscope analyze speech.wav --text-file expected.txt --format json --json report.json

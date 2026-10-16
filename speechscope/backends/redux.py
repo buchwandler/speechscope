@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 
 from ..errors import BackendUnavailableError, TranscriptionError, UnsupportedBackendOptionError
-from ..types import AudioInput, BackendInfo, TimedWord, TranscriptionResult
+from ..types import AudioInput, BackendAudioInput, BackendInfo, TimedWord, TranscriptionResult
 
 DEFAULT_MODEL = "moondream/parakeet-redux"
 
@@ -124,6 +124,14 @@ class ReduxTranscriber:
                 timing_source="native_word" if words else "unavailable",
                 backend_version=info().version,
                 device=self._device,
+                backend_audio_input=BackendAudioInput(
+                    kind="encoded_wav_path",
+                    selection="encoded_path",
+                    sample_rate_hz=audio.sample_rate,
+                    channels=audio.channels,
+                    sample_format=None,
+                    transformations=(),
+                ),
             )
         except Exception as exc:
             raise TranscriptionError(f"Redux inference failed: {exc}") from exc
@@ -133,3 +141,7 @@ class ReduxTranscriber:
             manager, self._manager = self._manager, None
             self._speech = None
             manager.__exit__(None, None, None)
+
+
+def create_backend(*, device: str = "cpu", model: str | None = None, cache_dir=None):
+    return ReduxTranscriber(device=device, model=model, cache_dir=cache_dir)

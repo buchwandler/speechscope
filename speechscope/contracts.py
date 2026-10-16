@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from .errors import TranscriptionError
-from .types import TimedWord, TranscriptionResult
+from .types import BackendAudioInput, TimedWord, TranscriptionResult
 
 _TIMING_SOURCES = {"native_word", "derived_segment", "unavailable"}
 
@@ -67,6 +67,12 @@ def validate_transcription_result(value: Any) -> TranscriptionResult:
     if value.timing_source not in _TIMING_SOURCES:
         raise TranscriptionError("Backend result has an unsupported timing_source")
 
+    if value.backend_audio_input is not None and not isinstance(
+        value.backend_audio_input, BackendAudioInput
+    ):
+        raise TranscriptionError(
+            "Backend result backend_audio_input must be BackendAudioInput or null"
+        )
     duration = _python_scalar(value.duration_s)
     if isinstance(duration, bool) or not isinstance(duration, Real):
         raise TranscriptionError("Backend result duration_s must be a finite nonnegative number")
@@ -100,4 +106,6 @@ def validate_transcription_result(value: Any) -> TranscriptionResult:
         timing_source=value.timing_source,
         backend_version=value.backend_version,
         device=value.device,
+        backend_audio_input=value.backend_audio_input,
+        diagnostics=value.diagnostics,
     )

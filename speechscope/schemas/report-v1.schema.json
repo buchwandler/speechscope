@@ -253,19 +253,21 @@
           "required": [
             "kind",
             "selection",
-            "path",
+            "source_path",
             "sample_rate_hz",
-            "source_channels",
+            "channels",
+            "sample_format",
             "loader_sample_transformations",
             "transformations_on_backend_input"
           ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "enum": ["encoded_wav_path", "audio_input"] },
-            "selection": { "enum": ["encoded_path", "provider_defined"] },
-            "path": { "type": "string" },
+            "kind": { "enum": ["encoded_wav_path", "generated_wav_path", "audio_input"] },
+            "selection": { "enum": ["encoded_path", "canonicalized_wav", "provider_defined"] },
+            "source_path": { "type": "string" },
             "sample_rate_hz": { "type": "integer", "minimum": 1 },
-            "source_channels": { "type": "integer", "minimum": 1 },
+            "channels": { "type": "integer", "minimum": 1 },
+            "sample_format": { "type": ["string", "null"] },
             "loader_sample_transformations": {
               "type": "array",
               "items": { "type": "string" }
