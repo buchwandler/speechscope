@@ -35,9 +35,9 @@ def load_wav(path: Path | str) -> AudioInput:
     channels = samples.shape[1]
     from audiosig import downmix_to_mono
 
-    mono = (downmix_to_mono(samples, channel_axis=1) if channels == 2 else samples[:, 0]).astype(
-        np.float64
-    )
+    mono: np.ndarray = (
+        downmix_to_mono(samples, channel_axis=1) if channels == 2 else samples[:, 0]
+    ).astype(np.float64)
     # Audiosig downmix averages channels; it does not clip or trim the signal.
     return AudioInput(
         samples=mono,

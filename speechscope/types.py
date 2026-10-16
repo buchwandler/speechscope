@@ -26,6 +26,12 @@ class AudioInput:
 
 @dataclass(frozen=True, slots=True)
 class TimedWord:
+    """ASR word timing in seconds from the start of the original audio.
+
+    ``start_s`` and ``end_s`` are nullable estimates; ``confidence`` is an
+    optional backend-provided score and is not a SpeechScope correctness value.
+    """
+
     text: str
     start_s: float | None
     end_s: float | None
@@ -44,6 +50,12 @@ class BackendInfo:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptionResult:
+    """Transcript plus ASR timing and provenance from one backend call.
+
+    ``timing_source`` distinguishes native word timestamps, conservatively
+    derived segment timing, and unavailable timing. Times are seconds.
+    """
+
     text: str
     words: tuple[TimedWord, ...]
     language: str | None
@@ -70,12 +82,28 @@ class AlignedWord:
 
 @dataclass(frozen=True, slots=True)
 class VerificationMetrics:
+    """Strict and compound-protocol text metrics plus timing coverage.
+
+    ``wer`` and the ``word_*`` counts use ordinary normalized whitespace
+    tokens. ``compound_wer`` additionally accepts bounded adjacent split/join
+    boundary variants and is divided by the strict reference token count;
+    ``content_match`` means no compound substitution, deletion, or insertion.
+    Timestamp coverage describes available ASR timing, not forced alignment.
+    """
+
     reference_word_count: int
     hypothesis_word_count: int
     word_matches: int
     word_substitutions: int
     word_deletions: int
     word_insertions: int
+    compound_word_matches: int
+    compound_word_substitutions: int
+    compound_word_deletions: int
+    compound_word_insertions: int
+    compound_wer: float
+    word_boundary_match_count: int
+    content_match: bool
     wer: float
     mer: float
     wil: float
@@ -98,7 +126,16 @@ class VerificationMetrics:
 
 @dataclass(frozen=True, slots=True)
 class ThresholdPolicy:
+    """Optional conjunctive thresholds for text and timestamp metrics.
+
+    ``max_wer`` gates strict whitespace-tokenized WER. Use
+    ``max_compound_wer`` when adjacent compound-boundary variants should be
+    tolerated; setting both requires both protocols to pass. Missing timing
+    follows ``missing_timing`` when a coverage rule is configured.
+    """
+
     max_wer: float | None = None
+    max_compound_wer: float | None = None
     max_cer: float | None = None
     max_mer: float | None = None
     min_reference_timestamp_coverage: float | None = None
@@ -109,6 +146,12 @@ class ThresholdPolicy:
 
 @dataclass(frozen=True, slots=True)
 class VerificationRequest:
+    """Request transcription and reference comparison for one audio file.
+
+    ``audio`` must be a WAV path. ``normalization`` selects a stable versioned
+    comparison profile; it does not change the compound matching algorithm.
+    """
+
     audio: Path | str
     reference_text: str
     backend: str = "redux"
@@ -122,6 +165,13 @@ class VerificationRequest:
 
 @dataclass(frozen=True, slots=True)
 class VerificationResult:
+    """Immutable transcription, comparison, evaluation, and provenance report.
+
+    ``reference_text`` and ``metrics`` are ``None`` for transcription-only
+    reports. ``to_dict`` and ``to_json`` preserve normalized inputs and emit
+    report schema v1; timing values are seconds and remain nullable when unknown.
+    """
+
     audio: Path
     audio_duration_s: float
     audio_sample_rate: int

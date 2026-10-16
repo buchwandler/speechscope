@@ -18,6 +18,13 @@ _FACTORIES: dict[str, Callable[..., object]] = {}
 
 
 def register_backend(name: str, factory: Callable[..., object]) -> None:
+    """Register a local backend factory without initializing it.
+
+    Factories receive ``device``, ``model`` and ``cache_dir`` keyword options
+    and must return an object implementing ``info()``, ``transcribe(audio,
+    language=None)`` and ``close()``. Duplicate names and reserved ``redux`` are
+    rejected; use an entry point for an installed plugin.
+    """
     if (
         not name
         or name == "redux"
@@ -42,6 +49,7 @@ def _names() -> tuple[str, ...]:
 
 
 def available_backends() -> tuple[BackendInfo, ...]:
+    """Return discoverable backend metadata without opening models or weights."""
     # Plugin capability inspection may require loading plugin metadata; never open a model.
     from .backends.redux import info
 

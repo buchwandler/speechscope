@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import fields
+from typing import Literal
 
 from .errors import InvalidThresholdPolicyError
 from .types import ThresholdPolicy, VerificationMetrics
@@ -17,7 +18,13 @@ def parse_policy(value: dict) -> ThresholdPolicy:
         raise InvalidThresholdPolicyError(str(exc)) from exc
     if policy.schema_version != "1" or policy.missing_timing not in ("review", "fail"):
         raise InvalidThresholdPolicyError("Unsupported policy schema or missing_timing action")
-    for key in ("max_wer", "max_cer", "max_mer", "min_reference_timestamp_coverage"):
+    for key in (
+        "max_wer",
+        "max_compound_wer",
+        "max_cer",
+        "max_mer",
+        "min_reference_timestamp_coverage",
+    ):
         v = getattr(policy, key)
         if v is not None and (
             not isinstance(v, (float, int))
@@ -41,6 +48,7 @@ def evaluate(metrics: VerificationMetrics, policy: ThresholdPolicy | None) -> di
     for key, op in (
         ("max_wer", "max"),
         ("max_cer", "max"),
+        ("max_compound_wer", "max"),
         ("max_mer", "max"),
         ("min_reference_timestamp_coverage", "min"),
         ("max_invalid_timestamp_count", "max"),
@@ -50,12 +58,14 @@ def evaluate(metrics: VerificationMetrics, policy: ThresholdPolicy | None) -> di
             continue
         metric_key = {
             "max_wer": "wer",
+            "max_compound_wer": "compound_wer",
             "max_cer": "cer",
             "max_mer": "mer",
             "min_reference_timestamp_coverage": "reference_timestamp_coverage_ratio",
             "max_invalid_timestamp_count": "invalid_timestamp_count",
         }[key]
         observed = getattr(metrics, metric_key)
+        outcome: Literal["pass", "fail", "review"]
         if (
             key == "min_reference_timestamp_coverage"
             and metrics.hypothesis_timestamp_coverage_ratio == 0

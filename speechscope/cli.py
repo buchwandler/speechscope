@@ -90,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "backends":
             if args.action == "list":
-                data = [asdict(info) for info in available_backends()]
+                data: list[dict[str, object]] | dict[str, object] = [
+                    asdict(info) for info in available_backends()
+                ]
             else:
                 data = asdict(backend_info(args.name))
             if args.format == "json":
@@ -126,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "metrics":
             # Audio-based quality metrics belong to audiosig and are not part of v0.1.
-            names = ["wer", "cer", "mer", "wil", "wip"]
+            names = ["wer", "compound_wer", "cer", "mer", "wil", "wip"]
             _emit(names if args.format == "json" else "\n".join(names), args.format)
             return 0
         # Check capabilities before expensive model initialization.
@@ -200,11 +202,12 @@ def main(argv: list[str] | None = None) -> int:
             if result.metrics:
                 m = result.metrics
                 print(
-                    f"WER: {m.wer:.4f}  CER: {m.cer:.4f}  MER: {m.mer:.4f}  WIL: {m.wil:.4f}  WIP: {m.wip:.4f}"
+                    f"WER: {m.wer:.4f}  Compound-WER: {m.compound_wer:.4f}  CER: {m.cer:.4f}  MER: {m.mer:.4f}  WIL: {m.wil:.4f}  WIP: {m.wip:.4f}"
                 )
                 print(
                     f"Words: matches={m.word_matches}, substitutions={m.word_substitutions}, deletions={m.word_deletions}, insertions={m.word_insertions}"
                 )
+                print(f"Boundary variants: {m.word_boundary_match_count}")
                 print(f"Reference timestamp coverage: {m.reference_timestamp_coverage_ratio:.1%}")
             print(f"Status: {result.evaluation['status']}")
         if args.verbose and result.diagnostics:

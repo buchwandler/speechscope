@@ -32,10 +32,39 @@ jobs:
       - run: python -m pytest -q -m "not integration"
       - run: python -m ruff check .
       - run: python -m ruff format --check .
-      - run: python -m compileall -q speechscope
+      - run: python -m mypy speechscope
+      - run: python -m compileall -q speechscope examples
       - run: python -c 'import json; from jsonschema import Draft202012Validator; Draft202012Validator.check_schema(json.load(open("speechscope/schemas/report-v1.schema.json")))'
 
+  minimum-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install "setuptools>=80" "setuptools-scm>=8,<11" wheel "numpy==1.24.*" "soundfile==0.12.*" "audiosig==0.1.6" "pytest>=8" "jsonschema>=4" "build>=1.2"
+      - run: python -m pip install --no-deps -e .
+      - run: python -m pytest -q tests/test_metrics.py tests/test_api.py tests/test_redux.py -m "not integration"
+
+  platform-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q tests/test_metrics.py tests/test_api.py
+
   release-artifacts:
+    needs: [offline-tests, minimum-dependencies, platform-smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,13 +83,15 @@ jobs:
           SDIST=$(printf '%s\n' dist/*.tar.gz)
           python -m venv /tmp/speechscope-wheel
           /tmp/speechscope-wheel/bin/python -m pip install "$WHEEL"
-          /tmp/speechscope-wheel/bin/python -c 'import importlib.metadata,pathlib,speechscope; assert importlib.metadata.version("speechscope")==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file()'
+          cd /tmp
+          /tmp/speechscope-wheel/bin/python -c 'import importlib.metadata,pathlib,speechscope; d=importlib.metadata.distribution("speechscope"); assert d.version==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file(); assert any("licenses/LICENSE" in str(p) for p in d.files)'
           /tmp/speechscope-wheel/bin/speechscope --version
           /tmp/speechscope-wheel/bin/speechscope metrics list
           /tmp/speechscope-wheel/bin/speechscope backends list --format json
           python -m venv /tmp/speechscope-sdist
-          /tmp/speechscope-sdist/bin/python -m pip install "$SDIST"
-          /tmp/speechscope-sdist/bin/python -c 'import importlib.metadata,pathlib,speechscope; assert importlib.metadata.version("speechscope")==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file()'
+          /tmp/speechscope-sdist/bin/python -m pip install "$GITHUB_WORKSPACE/$SDIST"
+          cd /tmp
+          /tmp/speechscope-sdist/bin/python -c 'import importlib.metadata,pathlib,speechscope; d=importlib.metadata.distribution("speechscope"); assert d.version==speechscope.__version__=="0.1.0"; assert pathlib.Path(speechscope.__file__).parent.joinpath("py.typed").is_file(); assert pathlib.Path(speechscope.__file__).parent.joinpath("schemas/report-v1.schema.json").is_file(); assert any("licenses/LICENSE" in str(p) for p in d.files)'
           /tmp/speechscope-sdist/bin/speechscope --version
           /tmp/speechscope-sdist/bin/speechscope metrics list
           /tmp/speechscope-sdist/bin/speechscope backends list --format json

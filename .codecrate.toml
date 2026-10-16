@@ -7,6 +7,7 @@ respect_gitignore = true
 exclude = ["*/.venv/*", "context_speechscope.*"]
 include = [
   "**/*.py",
+  "**/py.typed",
   "**/*.toml",
   "**/*.md",
   "**/*.json",

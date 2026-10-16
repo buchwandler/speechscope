@@ -9,6 +9,14 @@ _APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'", "＇": "'"})
 
 
 def normalize(text: str, profile: str = "basic-v1") -> str:
+    """Normalize text with a stable named profile, without linguistic expansion.
+
+    ``basic-v1`` applies Unicode NFKC/casefolding and punctuation-to-separator
+    normalization; ``strict-v1`` preserves case and punctuation while
+    collapsing whitespace; ``readio-compat-v1`` provides the documented legacy
+    punctuation behavior. Profiles do not expand numbers, contractions, or
+    compounds and do not segment unspaced languages.
+    """
     if profile not in ("basic-v1", "strict-v1", "readio-compat-v1"):
         raise InvalidReferenceError(f"Unknown normalization profile: {profile}")
     text = unicodedata.normalize("NFKC", text)

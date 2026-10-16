@@ -1,76 +1,93 @@
-# SpeechScope (v0.1 MVP)
+# SpeechScope
 
-Independent Python library and CLI for **WAV transcription with word timestamps** and **reference-text speech analysis**. Analyzes recognition accuracy; it does not synthesize speech, verify speaker identity, or infer independently verified word timings. No dependency on Readio or `speechonnxmetrics`.
+Independent Python library and CLI for **WAV transcription with ASR word timestamps** and **reference-text speech analysis**. SpeechScope evaluates recognition accuracy; it does not synthesize speech, identify speakers, or claim forced alignment.
 
 ## Install
 
+Install the core package (no ASR model download):
+
 ```bash
-pip install -e .                    # lightweight core, no ASR model download
-pip install -e '.[redux]'          # optional Moondream/Parakeet Redux
-pip install -e '.[dev]'            # offline tests
+pip install speechscope
 ```
 
-Python 3.11+. The core requires `audiosig>=0.1.6` for deterministic downmixing and signal preprocessing. The import and discovery paths never initialize an ASR model. First Redux transcription may download model weights to its managed cache. `moondream>=2.4.1` is optional; Redux supports only `moondream/parakeet-redux`, with CI contract coverage targeting the 2.4.1 minimum and the 2.6.1 release reviewed for v0.1.0.
+For Parakeet Redux transcription:
+
+```bash
+pip install 'speechscope[redux]'
+```
+
+Python 3.11+ is supported. The optional Redux integration uses Moondream/Parakeet Redux; its first inference may download model weights to Moondream's managed cache. Import and backend discovery do not initialize a model.
 
 ## CLI
 
 ```bash
 speechscope backends list --format json
-speechscope backends inspect redux --format json
 speechscope doctor --backend redux
 speechscope metrics list
 speechscope transcribe speech.wav --backend redux --format json --srt speech.srt
 speechscope analyze speech.wav --text-file expected.txt --format json --json report.json
-speechscope analyze speech.wav --text 'Hello there' --words alignment.csv --vtt transcript.vtt
-speechscope analyze speech.wav --text-file expected.txt --thresholds policy.json
+speechscope analyze speech.wav --text-file expected.txt --thresholds examples/policy-exact-content.json
 ```
 
-`verify` is a compatibility alias for `analyze`. `transcribe` omits reference metrics and alignment. No threshold policy means `not_evaluated`, not `pass`. JSON stdout is a single complete object; diagnostic messages go to stderr. Exit codes: 0 success/review/not-evaluated, 1 policy fail, 2 invalid input/export, 3 backend unavailable or unsupported, 4 inference failure, 5 unexpected error. Redux `doctor` checks installed Moondream version metadata (minimum 2.4.1); it does not initialize Photon, access weights, or validate hardware/model readiness.
+`verify` is a compatibility alias for `analyze`. Transcription-only reports omit reference metrics and alignment. No threshold policy means `not_evaluated`, not `pass`. JSON stdout is one complete report; diagnostics go to stderr. Exit codes: 0 success/review/not-evaluated, 1 policy failure, 2 invalid input/export, 3 backend unavailable/unsupported, 4 inference failure, 5 unexpected error. Redux `doctor` checks dependency metadata only; it does not initialize Photon, access weights, or verify hardware readiness.
 
-Redux uses `moondream.photon('moondream/parakeet-redux', device='cpu')` with `transcribe(audio=..., timestamps='word')`, matching Readio's verified integration and current Moondream docs. This adapter **has not been exercised against live weights in this offline MVP**. Parakeet Redux detects language automatically and rejects an explicit `--language` hint. `--cache-dir` is deliberately rejected until an upstream-supported contract is confirmed; model caching follows Moondream's own settings. Device `auto` leaves selection to Photon; explicit devices do not silently fall back in SpeechScope. First real use may download large model weights; plan for storage and memory use, and expect CPU inference to be slow. Check Moondream's current release notes for quantitative footprint and hardware requirements; SpeechScope makes no numeric performance promise.
+## Strict and compound-aware comparison
 
-The mocked Photon SDK contract and the explicitly opted-in, rights-cleared real CPU integration procedure are documented in [`docs/redux-integration.md`](docs/redux-integration.md). Offline tests do not import Redux or download model weights.
+SpeechScope keeps ordinary whitespace-tokenized `wer`, `mer`, `wil`, `wip`, and `word_*` counts unchanged. It also reports `compound_wer`, which allows a bounded adjacent split/join equivalence after the selected normalization profile. Each equivalence remains visible in `diagnostics`; true substitutions, deletions, and insertions remain errors.
+
+For example, with `basic-v1`, `audiobook` versus `audio book` can have strict WER `2/19` while compound WER and CER are `0`. Use `max_compound_wer: 0` with `max_cer: 0` when validating exact spoken content despite compound word-boundary spelling variation. Do not set `max_wer: 0` for that use case; it remains a strict orthographic tokenization gate. If exact word boundaries matter, use `max_wer` intentionally. Compound matching can also accept ambiguous pairs such as `nowhere` / `now here`, so inspect boundary diagnostics when semantics matter.
+
+See [comparison protocol](docs/comparison.md) for metric semantics, multilingual limits, and policy examples.
 
 ## Python API
 
 ```python
-from speechscope import VerificationRequest, analyze, transcribe, Verifier
+from speechscope import ThresholdPolicy, VerificationRequest, analyze, Verifier
 
-report = analyze(VerificationRequest("speech.wav", reference_text="Hello there"))
-print(report.metrics.wer, report.metrics.cer, report.metrics.wip)
-print(report.aligned_words)
+report = analyze(
+    VerificationRequest(
+        "speech.wav",
+        reference_text="Hello there",
+        thresholds=ThresholdPolicy(max_compound_wer=0.0, max_cer=0.0),
+    )
+)
+print(report.metrics.wer, report.metrics.compound_wer, report.metrics.cer)
+print(report.metrics.content_match, report.diagnostics)
 report.write_json("report.json")
-transcript = transcribe("speech.wav")
-print(transcript.words)
 
 with Verifier(backend="redux", device="cpu") as session:
-    for wav in ["a.wav", "b.wav"]:
+    for wav in ("a.wav", "b.wav"):
         print(session.transcribe(wav).text)
 ```
 
-Third-party providers register a factory with `register_backend(name, factory)` or publish an entry-point in `speechscope.backends`. Factories accept `device`, `model`, `cache_dir` and return an object with `info()`, `transcribe(AudioInput, *, language=None)` and `close()` methods. Duplicate backend names are rejected. Unit tests use a fake, offline backend.
+Third-party providers can register a factory with `register_backend(name, factory)` or install an entry point in `speechscope.backends`. See [backend integration](docs/backends.md) and `examples/custom_backend.py` for the minimal protocol.
 
-## Normalization and timing
+## Normalization, alignment, and timing
 
-`basic-v1` applies Unicode NFKC and casefolding, turns punctuation into separators, collapses whitespace, retains underscores and internal apostrophes, and does not remove accents or perform stemming, transliteration, or language-specific segmentation. `strict-v1` applies NFKC and whitespace collapse while preserving case/punctuation. `readio-compat-v1` retains Readio's punctuation behavior for migration. These versioned profiles are stable; semantic changes require a new profile ID. Word metrics use whitespace tokenization after normalization, so scripts without spaces (for example, unsegmented Chinese) may remain one token. Do not treat WER as language-independent or directly compare languages without matching tokenization conventions. Word alignment uses a single Levenshtein path with tie preference match > substitution > deletion > insertion. WER/CER can exceed 1.0. MER/WIL/WIP are derived from the same word path.
+`basic-v1` applies Unicode NFKC/casefolding, punctuation-to-separator normalization, and whitespace collapse; it retains underscores and internal apostrophes. `strict-v1` preserves case and punctuation while collapsing whitespace. `readio-compat-v1` preserves the documented legacy punctuation behavior. These versioned profiles are stable: changes require a new profile ID. They do not expand numbers, contractions, spelling variants, or compounds. WER depends on normalization and tokenization and is not language-independent; scripts without spaces may remain one token. See [comparison protocol](docs/comparison.md).
 
-Alignment work is bounded by `(reference length + 1) * (hypothesis length + 1)` dynamic-programming cells. Word alignment retains its backtrace matrix up to 1,000,000 cells; character-error counts use a two-row algorithm up to 5,000,000 cells. Larger comparisons raise `AlignmentTooLargeError` before the DP allocation (CLI exit code 2). For similarly sized inputs these limits are about 999 words per side and 2,235 non-space Unicode code points per side; the exact limit depends on both lengths. Transcription-only mode is not subject to these comparison limits.
-Word timestamps are **ASR estimates, not ground-truth forced alignment**. Only unambiguous one-to-one correspondence between normalized ASR word entries and transcript tokens permits timestamp projection; otherwise timestamps are null. Invalid timing is diagnosed and not used for coverage. `reference_timestamp_coverage_ratio` measures timestamped reference alignment positions, including substitutions; it is not a correctness score or forced alignment, so pair it with text-accuracy thresholds when correctness matters. A missing timestamp cannot be used to make an SRT/VTT caption. Original-audio time is preserved; no silence trimming.
+Word alignment work is bounded by `(reference length + 1) * (hypothesis length + 1)` dynamic-programming cells. Strict alignment retains its backtrace up to 1,000,000 cells; compound alignment uses the same budget and permits at most three tokens on one side of a split/join match. CER uses a two-row algorithm up to 5,000,000 cells. Larger comparisons raise `AlignmentTooLargeError` before allocation.
 
-Redux receives the original encoded WAV path. SpeechScope's `audio_transformations` records changes to the loader's mono sample representation (such as Audiosig downmix), not necessarily the signal consumed by Redux; report provenance adds `backend_audio_input` to distinguish this pass-through path. Moondream may preprocess multichannel encoded audio independently.
+Word timestamps are **ASR estimates**, not ground-truth forced alignment. Only unambiguous one-to-one normalized ASR word/token correspondence permits timestamp projection. For example, a native `end-to-end` timestamp does not establish separate timestamps for normalized `end`, `to`, `end` tokens; those token timings remain unavailable. Invalid timing is diagnosed. `reference_timestamp_coverage_ratio` measures usable ASR timing, not textual correctness. Original audio time is preserved.
 
-Reports follow `speechscope/schemas/report-v1.schema.json`. Transcription-only mode has `reference=null`, `metrics=null`, `alignment=[]`. Schema versioning is separate from package version. CSV/SRT/VTT use recognized ASR text, not reference words presented as spoken. All individual output writes are atomic. Caption grouping uses consecutive word timings and duration/character limits, not language-aware sentence segmentation; punctuation and UTF-8 text are preserved, and a single long word is not split. Cross-file transactionality is not guaranteed in this MVP.
+Reports use the packaged [report-v1 schema](docs/report-schema.md). Transcription-only mode has `reference=null`, `metrics=null`, and an empty alignment. `provenance.backend_audio_input` records which audio representation a backend received. CSV/SRT/VTT use recognized text, and individual file writes are atomic.
 
-`processing_time_s` and `realtime_factor` use the same boundary for analysis and transcription-only reports: processing begins after the backend context/model initialization and WAV loading, and ends after inference and transcript normalization; analysis additionally includes alignment and metric calculation, but not threshold evaluation or JSON serialization. They exclude initialization, audio loading, and backend teardown; `realtime_factor` is `processing_time_s / audio_duration_s`. These values are not first-call end-to-end latency, which may include a model download or load.
+## Redux evidence
 
-## Dynamic versioning and flat layout
+The supplied Piper report records a live run with Moondream 2.6.1, `moondream/parakeet-redux`, CPU inference, WAV input, and native word timestamps. This is evidence for that reported setup only; it does not establish compatibility across all operating systems, devices, or model/runtime combinations. SpeechScope's offline suite uses fake backends and its Redux SDK tests mock the SDK contract. The rights-cleared real-model integration remains an explicit opt-in release gate; see [Redux integration](docs/redux-integration.md) and [release readiness](docs/v0.1.0-release-readiness.md).
 
-Versions are derived from Git tags by `setuptools-scm` (for example `v0.1.0`), with `0.1.dev0` only as an archive-without-Git fallback. Wheel and sdist versions are determined at build time; `speechscope/_version.py` is generated during the build. Package sources live in `speechscope/` at repository root, **without a `src/` directory**.
+## Development
 
-## Scope
+```bash
+python -m pip install -e '.[dev]'
+python -m pytest -q -m 'not integration'
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy speechscope
+```
 
-MVP implementation scope: WAV loading, ASR via optional Redux, reusable sessions, text alignment, five text metrics, timing plausibility, policy thresholds, JSON/CSV/SRT/VTT, and offline backend contracts. Neural MOS (UTMOS/DNSMOS/SIGMOS/NISQA), STOI, and spectral reference-audio metrics are **not implemented**. SpeechScope remains independent of Readio and does not vendor its source. The real Redux model has not been exercised in this implementation.
+The package uses a flat layout (`speechscope/`, not `src/`) and derives versions from Git tags with `setuptools-scm`. `speechscope/py.typed` and the report schema are package data. Short runnable scripts are in [`examples/`](examples/README.md).
 
-## Release verification
+## Release status
 
-No `v0.1.0` tag was created and nothing was published. The staged `0.1.0` artifacts are validation artifacts, not a release. Real Redux inference, GitHub Actions, Twine checks, and a clean Linux dependency install remain external gates; see [`docs/v0.1.0-release-readiness.md`](docs/v0.1.0-release-readiness.md) for the exact evidence and blockers.
+SpeechScope v0.1.0 remains unreleased ([changelog](docs/changelog.md)); no tag or PyPI publication has been made. Hosted CI, clean Linux artifact/Twine checks, and reproducible rights-cleared Redux inference must pass before release; see the [release-readiness record](docs/v0.1.0-release-readiness.md).

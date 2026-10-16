@@ -5,18 +5,42 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal, TypedDict
 
 from .errors import AlignmentTooLargeError, InvalidReferenceError
 
 MAX_EDIT_PATH_CELLS = 1_000_000
 MAX_CHARACTER_CELLS = 5_000_000
 
+MAX_COMPOUND_PARTS = 3
+
 
 @dataclass(frozen=True)
 class Edit:
-    tag: str
+    tag: Literal["match", "substitution", "deletion", "insertion"]
     ref: int | None
     hyp: int | None
+
+
+@dataclass(frozen=True)
+class CompoundEdit:
+    """Grouped word edit with half-open reference and hypothesis token spans."""
+
+    tag: Literal["match", "boundary_match", "substitution", "deletion", "insertion"]
+    ref_start: int
+    ref_end: int
+    hyp_start: int
+    hyp_end: int
+
+
+class CompoundWordRates(TypedDict):
+    compound_word_matches: int
+    compound_word_substitutions: int
+    compound_word_deletions: int
+    compound_word_insertions: int
+    compound_wer: float
+    word_boundary_match_count: int
+    content_match: bool
 
 
 def edit_path(reference: Sequence[str], hypothesis: Sequence[str]) -> tuple[Edit, ...]:
@@ -80,6 +104,144 @@ def word_rates(edits: Sequence[Edit], ref_length: int, hyp_length: int) -> dict:
         "mer": errors / (h + errors),
         "wip": preserved,
         "wil": 1.0 - preserved,
+    }
+
+
+def compound_edit_path(
+    reference: Sequence[str],
+    hypothesis: Sequence[str],
+    *,
+    max_parts: int = MAX_COMPOUND_PARTS,
+) -> tuple[CompoundEdit, ...]:
+    """Align words while allowing bounded adjacent split/join equivalences.
+
+    A boundary match consumes one token on one side and two through
+    ``max_parts`` adjacent tokens on the other. The multi-token side must
+    concatenate exactly to the single token. Only lexical edit count is
+    optimized; ties prefer exact matches, then the boundary match consuming
+    the fewest parts, substitution, deletion, and insertion.
+
+    The same cell budget as :func:`edit_path` is checked before allocating the
+    dynamic-programming matrix. ``max_parts`` may narrow the v0.1.0 maximum,
+    but cannot exceed it.
+    """
+    if type(max_parts) is not int or not 1 <= max_parts <= MAX_COMPOUND_PARTS:
+        raise ValueError(f"max_parts must be an integer from 1 to {MAX_COMPOUND_PARTS}")
+
+    n, m = len(reference), len(hypothesis)
+    cells = (n + 1) * (m + 1)
+    if cells > MAX_EDIT_PATH_CELLS:
+        raise AlignmentTooLargeError(
+            f"Word alignment needs {cells:,} dynamic-programming cells; "
+            f"the limit is {MAX_EDIT_PATH_CELLS:,}. Shorten the reference or transcript."
+        )
+
+    k_limit = min(max_parts, max(n, m))
+    reference_joins = [
+        {k: "".join(reference[i : i + k]) for k in range(2, min(k_limit, n - i) + 1)}
+        for i in range(n)
+    ]
+    hypothesis_joins = [
+        {k: "".join(hypothesis[j : j + k]) for k in range(2, min(k_limit, m - j) + 1)}
+        for j in range(m)
+    ]
+
+    cost = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        cost[i][0] = i
+    for j in range(m + 1):
+        cost[0][j] = j
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            best = min(
+                cost[i - 1][j] + 1,
+                cost[i][j - 1] + 1,
+                cost[i - 1][j - 1] + (reference[i - 1] != hypothesis[j - 1]),
+            )
+            if reference[i - 1] == hypothesis[j - 1]:
+                best = min(best, cost[i - 1][j - 1])
+            for parts in range(2, min(k_limit, j) + 1):
+                if i and reference[i - 1] == hypothesis_joins[j - parts][parts]:
+                    best = min(best, cost[i - 1][j - parts])
+            for parts in range(2, min(k_limit, i) + 1):
+                if j and reference_joins[i - parts][parts] == hypothesis[j - 1]:
+                    best = min(best, cost[i - parts][j - 1])
+            cost[i][j] = best
+
+    edits = []
+    i, j = n, m
+    while i or j:
+        current = cost[i][j]
+        if i and j and reference[i - 1] == hypothesis[j - 1] and current == cost[i - 1][j - 1]:
+            edits.append(CompoundEdit("match", i - 1, i, j - 1, j))
+            i -= 1
+            j -= 1
+            continue
+
+        boundary = []
+        for parts in range(2, min(k_limit, j) + 1):
+            if (
+                i
+                and reference[i - 1] == hypothesis_joins[j - parts][parts]
+                and current == cost[i - 1][j - parts]
+            ):
+                boundary.append((parts, "reference_joined", parts))
+        for parts in range(2, min(k_limit, i) + 1):
+            if (
+                j
+                and reference_joins[i - parts][parts] == hypothesis[j - 1]
+                and current == cost[i - parts][j - 1]
+            ):
+                boundary.append((parts, "hypothesis_joined", parts))
+        if boundary:
+            _, direction, parts = min(boundary)
+            if direction == "reference_joined":
+                edits.append(CompoundEdit("boundary_match", i - 1, i, j - parts, j))
+                i -= 1
+                j -= parts
+            else:
+                edits.append(CompoundEdit("boundary_match", i - parts, i, j - 1, j))
+                i -= parts
+                j -= 1
+            continue
+
+        if i and j and current == cost[i - 1][j - 1] + 1:
+            edits.append(CompoundEdit("substitution", i - 1, i, j - 1, j))
+            i -= 1
+            j -= 1
+        elif i and current == cost[i - 1][j] + 1:
+            edits.append(CompoundEdit("deletion", i - 1, i, j, j))
+            i -= 1
+        else:
+            edits.append(CompoundEdit("insertion", i, i, j - 1, j))
+            j -= 1
+    return tuple(reversed(edits))
+
+
+def compound_word_rates(edits: Sequence[CompoundEdit], ref_length: int) -> CompoundWordRates:
+    """Count compound-protocol word errors over the strict reference length.
+
+    Boundary matches count all reference tokens in their span as matched;
+    ``word_boundary_match_count`` separately counts the explicit variants.
+    """
+    if not ref_length:
+        raise InvalidReferenceError("Reference contains no words after normalization")
+    counts = Counter(edit.tag for edit in edits)
+    matches = sum(
+        edit.ref_end - edit.ref_start for edit in edits if edit.tag in ("match", "boundary_match")
+    )
+    substitutions = counts["substitution"]
+    deletions = counts["deletion"]
+    insertions = counts["insertion"]
+    return {
+        "compound_word_matches": matches,
+        "compound_word_substitutions": substitutions,
+        "compound_word_deletions": deletions,
+        "compound_word_insertions": insertions,
+        "compound_wer": (substitutions + deletions + insertions) / ref_length,
+        "word_boundary_match_count": counts["boundary_match"],
+        "content_match": substitutions == deletions == insertions == 0,
     }
 
 

@@ -16,11 +16,13 @@
     "diagnostics",
     "provenance"
   ],
+  "additionalProperties": false,
   "properties": {
     "schema_version": { "const": "1" },
     "tool": {
       "type": "object",
       "required": ["name", "version"],
+      "additionalProperties": false,
       "properties": {
         "name": { "const": "speechscope" },
         "version": { "type": "string" }
@@ -29,6 +31,7 @@
     "input": {
       "type": "object",
       "required": ["audio_path", "duration_s", "sample_rate_hz", "channels"],
+      "additionalProperties": false,
       "properties": {
         "audio_path": { "type": "string" },
         "duration_s": { "type": "number", "exclusiveMinimum": 0 },
@@ -39,6 +42,7 @@
     "backend": {
       "type": "object",
       "required": ["name", "version", "model", "device"],
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string" },
         "version": { "type": ["string", "null"] },
@@ -52,6 +56,7 @@
         {
           "type": "object",
           "required": ["raw", "normalized", "profile"],
+          "additionalProperties": false,
           "properties": {
             "raw": { "type": "string" },
             "normalized": { "type": "string" },
@@ -63,6 +68,7 @@
     "transcript": {
       "type": "object",
       "required": ["raw", "normalized", "language", "timing_source", "words"],
+      "additionalProperties": false,
       "properties": {
         "raw": { "type": "string" },
         "normalized": { "type": "string" },
@@ -86,7 +92,14 @@
             "word_substitutions",
             "word_deletions",
             "word_insertions",
+            "compound_word_matches",
+            "compound_word_substitutions",
+            "compound_word_deletions",
+            "compound_word_insertions",
+            "word_boundary_match_count",
+            "content_match",
             "wer",
+            "compound_wer",
             "cer",
             "mer",
             "wil",
@@ -105,13 +118,56 @@
             "processing_time_s",
             "realtime_factor"
           ],
+          "additionalProperties": false,
           "properties": {
+            "reference_word_count": { "type": "integer", "minimum": 0 },
+            "hypothesis_word_count": { "type": "integer", "minimum": 0 },
+            "word_matches": { "type": "integer", "minimum": 0 },
+            "word_substitutions": { "type": "integer", "minimum": 0 },
+            "word_deletions": { "type": "integer", "minimum": 0 },
+            "word_insertions": { "type": "integer", "minimum": 0 },
+            "compound_word_matches": { "type": "integer", "minimum": 0 },
+            "compound_word_substitutions": { "type": "integer", "minimum": 0 },
+            "compound_word_deletions": { "type": "integer", "minimum": 0 },
+            "compound_word_insertions": { "type": "integer", "minimum": 0 },
+            "word_boundary_match_count": { "type": "integer", "minimum": 0 },
+            "content_match": { "type": "boolean" },
+            "wer": { "type": "number", "minimum": 0 },
+            "compound_wer": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Compound-protocol lexical errors divided by the strict reference token count; not ordinary whitespace-tokenized WER."
+            },
+            "cer": { "type": "number", "minimum": 0 },
+            "mer": { "type": "number", "minimum": 0 },
+            "wil": { "type": "number", "minimum": 0 },
+            "wip": { "type": "number", "minimum": 0 },
+            "reference_character_count": { "type": "integer", "minimum": 0 },
+            "character_substitutions": { "type": "integer", "minimum": 0 },
+            "character_deletions": { "type": "integer", "minimum": 0 },
+            "character_insertions": { "type": "integer", "minimum": 0 },
+            "aligned_reference_words_with_timestamps": {
+              "type": "integer",
+              "minimum": 0
+            },
             "reference_timestamp_coverage_ratio": {
               "type": "number",
               "minimum": 0,
               "maximum": 1,
               "description": "Fraction of reference alignment positions with usable ASR timestamps; timestamped substitutions count and do not imply correctness or forced alignment."
             },
+            "hypothesis_timestamp_coverage_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "invalid_timestamp_count": { "type": "integer", "minimum": 0 },
+            "non_monotonic_timestamp_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_word_end_s": { "$ref": "#/$defs/nullableTime" },
+            "trailing_audio_s": { "$ref": "#/$defs/nullableTime" },
             "processing_time_s": {
               "type": "number",
               "minimum": 0,
@@ -121,12 +177,7 @@
               "type": "number",
               "minimum": 0,
               "description": "Processing wall time divided by audio duration; not end-to-end first-call latency."
-            },
-            "wer": { "type": "number", "minimum": 0 },
-            "cer": { "type": "number", "minimum": 0 },
-            "mer": { "type": "number", "minimum": 0 },
-            "wil": { "type": "number", "minimum": 0 },
-            "wip": { "type": "number", "minimum": 0 }
+            }
           }
         }
       ]
@@ -134,19 +185,53 @@
     "evaluation": {
       "type": "object",
       "required": ["status", "rules"],
+      "additionalProperties": false,
       "properties": {
         "status": { "enum": ["pass", "fail", "review", "not_evaluated"] },
-        "rules": { "type": "array" }
+        "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" } }
       }
     },
-    "diagnostics": { "type": "array" },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code"],
+        "properties": { "code": { "type": "string" } },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "code": { "const": "word_boundary_variant" } },
+              "required": ["code"]
+            },
+            "then": {
+              "required": [
+                "reference_span",
+                "hypothesis_span",
+                "reference_text",
+                "hypothesis_text"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "code": { "const": "word_boundary_variant" },
+                "reference_span": { "$ref": "#/$defs/tokenSpan" },
+                "hypothesis_span": { "$ref": "#/$defs/tokenSpan" },
+                "reference_text": { "type": "string" },
+                "hypothesis_text": { "type": "string" }
+              }
+            }
+          }
+        ]
+      }
+    },
     "provenance": {
       "type": "object",
       "required": [
         "processing_time_s",
         "realtime_factor",
-        "audio_transformations"
+        "audio_transformations",
+        "backend_audio_input"
       ],
+      "additionalProperties": false,
       "properties": {
         "processing_time_s": {
           "type": "number",
@@ -174,6 +259,7 @@
             "loader_sample_transformations",
             "transformations_on_backend_input"
           ],
+          "additionalProperties": false,
           "properties": {
             "kind": { "enum": ["encoded_wav_path", "audio_input"] },
             "selection": { "enum": ["encoded_path", "provider_defined"] },
@@ -197,9 +283,31 @@
   },
   "$defs": {
     "nullableTime": { "type": ["number", "null"], "minimum": 0 },
+    "tokenSpan": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "integer", "minimum": 0 }
+      ],
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "Zero-based, half-open token span [start, end)."
+    },
+    "rule": {
+      "type": "object",
+      "required": ["name", "observed", "expected", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "observed": { "type": "number" },
+        "expected": { "type": "number" },
+        "status": { "enum": ["pass", "fail", "review"] }
+      }
+    },
     "word": {
       "type": "object",
       "required": ["text", "start_s", "end_s", "confidence"],
+      "additionalProperties": false,
       "properties": {
         "text": { "type": "string" },
         "start_s": { "$ref": "#/$defs/nullableTime" },
@@ -220,6 +328,7 @@
         "timing_source",
         "confidence"
       ],
+      "additionalProperties": false,
       "properties": {
         "operation": {
           "enum": ["match", "substitution", "deletion", "insertion"]

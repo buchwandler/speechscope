@@ -9,20 +9,33 @@ description = "Timestamped speech transcription, word alignment, and reference-b
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{name = "Holger Nahrstaedt"}]
 keywords = ["speech", "asr", "transcription", "word-error-rate", "timestamps", "audio-quality"]
-dependencies = ["numpy>=1.24", "soundfile>=0.12", "audiosig>=0.1.6"]
+dependencies = ["numpy>=1.24", "soundfile>=0.12", "audiosig>=0.1.6,<0.2"]
 classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Topic :: Multimedia :: Sound/Audio", "Typing :: Typed"]
 
 [project.optional-dependencies]
-redux = ["moondream>=2.4.1"]
-dev = ["pytest>=8", "jsonschema>=4", "build>=1.2", "twine>=6", "ruff>=0.6", "setuptools-scm>=8,<11"]
-
+redux = ["moondream>=2.4.1,<3"]
+dev = [
+  "pytest>=8",
+  "jsonschema>=4",
+  "build>=1.2",
+  "twine>=6",
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "setuptools>=80",
+  "wheel",
+  "setuptools-scm>=8,<11",
+]
 [project.scripts]
 speechscope = "speechscope.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/buchwandler/speechscope"
 Repository = "https://github.com/buchwandler/speechscope"
+Issues = "https://github.com/buchwandler/speechscope/issues"
+Changelog = "https://github.com/buchwandler/speechscope/blob/main/docs/changelog.md"
 
 [tool.setuptools]
 package-dir = {"" = "."}
@@ -47,3 +60,11 @@ markers = ["integration: requires real model weights"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["SPEECHSCOPE_V0_1_0_COMPARISON_AND_RELEASE_BRIEF.md"]
+
+
+[tool.mypy]
+python_version = "3.12"
+files = ["speechscope"]
+ignore_missing_imports = true
+warn_unused_configs = true

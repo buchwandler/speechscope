@@ -580,3 +580,80 @@ def test_redux_doctor_rejects_sdk_below_supported_floor(monkeypatch, capsys):
 
     assert main(["doctor", "--backend", "redux"]) == 3
     assert "does not satisfy Redux's >=2.4.1 minimum" in capsys.readouterr().err
+
+
+def test_compound_wer_exact_piper_regression_and_policy_distinction(register_fake, wav, capsys):
+    reference = (
+        "Smoke The quick brown fox jumps over the lazy dog. "
+        "This is an end to end audiobook pipeline test."
+    )
+    hypothesis = (
+        "smoke. The quick brown fox jumps over the lazy dog. "
+        "This is an end-to-end audio book pipeline test."
+    )
+    register_fake(hypothesis)
+    tolerant = analyze(
+        VerificationRequest(
+            wav,
+            reference,
+            backend="ci-fake",
+            thresholds=ThresholdPolicy(max_compound_wer=0.0, max_cer=0.0),
+        )
+    )
+    assert tolerant.metrics.wer == pytest.approx(2 / 19)
+    assert tolerant.metrics.cer == 0.0
+    assert tolerant.metrics.compound_wer == 0.0
+    assert tolerant.metrics.word_boundary_match_count == 1
+    assert tolerant.metrics.content_match is True
+    assert tolerant.evaluation["status"] == "pass"
+    assert tolerant.normalized_reference.endswith("audiobook pipeline test")
+    variant = next(item for item in tolerant.diagnostics if item["code"] == "word_boundary_variant")
+    assert variant == {
+        "code": "word_boundary_variant",
+        "reference_span": [16, 17],
+        "hypothesis_span": [16, 18],
+        "reference_text": "audiobook",
+        "hypothesis_text": "audio book",
+    }
+
+    schema = json.loads(
+        (
+            Path(__file__).parents[1] / "speechscope" / "schemas" / "report-v1.schema.json"
+        ).read_text()
+    )
+    validate(tolerant.to_dict(), schema)
+
+    strict = analyze(
+        VerificationRequest(
+            wav,
+            reference,
+            backend="ci-fake",
+            thresholds=ThresholdPolicy(max_compound_wer=0.0, max_cer=0.0, max_wer=0.0),
+        )
+    )
+    assert strict.metrics.wer == pytest.approx(2 / 19)
+    assert strict.metrics.compound_wer == 0.0
+    assert strict.evaluation["status"] == "fail"
+    assert {rule["name"]: rule["status"] for rule in strict.evaluation["rules"]}[
+        "max_wer"
+    ] == "fail"
+
+    assert (
+        main(
+            ["analyze", str(wav), "--backend", "ci-fake", "--text", reference, "--format", "human"]
+        )
+        == 0
+    )
+    human_output = capsys.readouterr().out
+    assert "WER: 0.1053  Compound-WER: 0.0000  CER: 0.0000" in human_output
+    assert "Boundary variants: 1" in human_output
+
+    assert main(["metrics", "list", "--format", "json"]) == 0
+    assert "compound_wer" in json.loads(capsys.readouterr().out)
+
+
+def test_max_compound_wer_policy_validation():
+    from speechscope.evaluation import parse_policy
+
+    with pytest.raises(InvalidThresholdPolicyError, match="max_compound_wer"):
+        parse_policy({"max_compound_wer": -0.1})

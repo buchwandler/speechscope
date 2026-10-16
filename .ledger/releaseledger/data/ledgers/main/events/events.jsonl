@@ -1,0 +1,2 @@
+{"data":{"status":"planned"},"event":"release.created","event_id":"event-0001","record_revisions":{"release:0.1.0":1},"release_version":"0.1.0","schema_version":2}
+{"data":{"kind":"added","status":"accepted"},"entry_id":"entry-0001","event":"entry.added","event_id":"event-0002","record_revisions":{"entry:0.1.0/entry-0001":1,"release:0.1.0":2},"release_version":"0.1.0","schema_version":2}

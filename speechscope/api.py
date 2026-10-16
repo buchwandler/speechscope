@@ -18,7 +18,7 @@ from .errors import (
     UnsupportedBackendOptionError,
 )
 from .evaluation import evaluate, parse_policy
-from .metrics import char_rates, edit_path, word_rates
+from .metrics import char_rates, compound_edit_path, compound_word_rates, edit_path, word_rates
 from .normalize import normalize
 from .registry import open_backend
 from .timing import inspected_words, project_alignment, token_timing_map
@@ -130,6 +130,19 @@ class Verifier:
         edits = edit_path(ref_tokens, hyp_tokens)
         wm = word_rates(edits, len(ref_tokens), len(hyp_tokens))
         cm = char_rates(normalized_reference, normalized_transcript)
+        compound_edits = compound_edit_path(ref_tokens, hyp_tokens)
+        compound_metrics = compound_word_rates(compound_edits, len(ref_tokens))
+        for edit in compound_edits:
+            if edit.tag == "boundary_match":
+                diagnostics.append(
+                    {
+                        "code": "word_boundary_variant",
+                        "reference_span": [edit.ref_start, edit.ref_end],
+                        "hypothesis_span": [edit.hyp_start, edit.hyp_end],
+                        "reference_text": " ".join(ref_tokens[edit.ref_start : edit.ref_end]),
+                        "hypothesis_text": " ".join(hyp_tokens[edit.hyp_start : edit.hyp_end]),
+                    }
+                )
         word_map = token_timing_map(transcript.text, transcript.words, request.normalization)
         if transcript.words and not any(w is not None for w in word_map.values()):
             diagnostics.append(
@@ -159,6 +172,7 @@ class Verifier:
             reference_word_count=len(ref_tokens),
             hypothesis_word_count=len(hyp_tokens),
             **wm,
+            **compound_metrics,
             **cm,
             aligned_reference_words_with_timestamps=timed_ref,
             reference_timestamp_coverage_ratio=timed_ref / len(ref_tokens),
@@ -211,6 +225,12 @@ def _validate_analysis_inputs(request: VerificationRequest) -> str:
 
 
 def analyze(request: VerificationRequest) -> VerificationResult:
+    """Transcribe audio and compare its normalized text with a reference.
+
+    The returned report contains strict and compound-aware metrics, explicit
+    boundary-variant diagnostics, policy evaluation, and conservative ASR
+    timestamp coverage. It does not perform forced alignment.
+    """
     loaded = load_wav(request.audio)
     normalized_reference = _validate_analysis_inputs(request)
     with Verifier(
@@ -236,6 +256,12 @@ def transcribe(
     model: str | None = None,
     cache_dir=None,
 ) -> TranscriptionResult:
+    """Transcribe one WAV and return its backend-provided text and word timing.
+
+    Times are in seconds from the original audio; ``None`` means the backend
+    did not provide a usable value. A new backend session is opened per call.
+    Use :class:`Verifier` to reuse one model across multiple files.
+    """
     loaded = load_wav(audio)
     with Verifier(backend=backend, device=device, model=model, cache_dir=cache_dir) as session:
         return session._transcribe_loaded(loaded, language)
@@ -250,6 +276,7 @@ def transcribe_report(
     model: str | None = None,
     cache_dir=None,
 ) -> VerificationResult:
+    """Create a report-v1 result for transcription without reference metrics."""
     loaded = load_wav(audio)
     with Verifier(backend=backend, device=device, model=model, cache_dir=cache_dir) as session:
         started = perf_counter()

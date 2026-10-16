@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .errors import ExportError
 from .timing import caption_timestamp_error
-from .types import VerificationResult, atomic_write
+from .types import TimedWord, VerificationResult, atomic_write
 
 
 def write_words(result: VerificationResult, path: Path | str) -> None:
@@ -44,8 +44,8 @@ def write_words(result: VerificationResult, path: Path | str) -> None:
                 }
             )
     else:
-        for word in result.aligned_words:
-            writer.writerow({key: getattr(word, key) for key in keys})
+        for aligned in result.aligned_words:
+            writer.writerow({key: getattr(aligned, key) for key in keys})
     atomic_write(Path(path), out.getvalue())
 
 
@@ -72,14 +72,18 @@ def write_captions(
     if error:
         raise ExportError(error)
     captions = []
-    current = []
+    current: list[TimedWord] = []
     for word in words:
-        if current and (
-            word.end_s - current[0].start_s > max_seconds
-            or len(" ".join(w.text for w in [*current, word])) > max_chars
-        ):
-            captions.append(current)
-            current = []
+        assert word.start_s is not None and word.end_s is not None
+        if current:
+            first_start = current[0].start_s
+            assert first_start is not None
+            if (
+                word.end_s - first_start > max_seconds
+                or len(" ".join(w.text for w in [*current, word])) > max_chars
+            ):
+                captions.append(current)
+                current = []
         current.append(word)
     if current:
         captions.append(current)
@@ -87,11 +91,10 @@ def write_captions(
     for i, group in enumerate(captions, 1):
         if kind == "srt":
             lines.append(str(i))
+        start, end = group[0].start_s, group[-1].end_s
+        assert start is not None and end is not None
         lines += [
-            (
-                f"{_timestamp(group[0].start_s, srt=kind == 'srt')} --> "
-                f"{_timestamp(group[-1].end_s, srt=kind == 'srt')}"
-            ),
+            (f"{_timestamp(start, srt=kind == 'srt')} --> {_timestamp(end, srt=kind == 'srt')}"),
             " ".join(word.text for word in group).strip(),
             "",
         ]

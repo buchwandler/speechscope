@@ -18,23 +18,26 @@ def caption_timestamp_error(words: tuple[TimedWord, ...], duration_s: float) -> 
     """
     if not words:
         return "Cannot export captions: word timestamps are unavailable"
-    previous_start = None
+    previous_start: float | None = None
     for index, word in enumerate(words):
         start, end = word.start_s, word.end_s
-        valid = (
-            start is not None
-            and end is not None
-            and all(
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and math.isfinite(value)
-                for value in (start, end)
-            )
-            and start >= 0
-            and start <= end
-            and end <= duration_s + 0.05
-        )
-        if not valid:
+        if start is None or end is None:
+            return f"Cannot export captions: invalid timestamp for word {index}"
+        if (
+            isinstance(start, bool)
+            or not isinstance(start, (int, float))
+            or isinstance(end, bool)
+            or not isinstance(end, (int, float))
+        ):
+            return f"Cannot export captions: invalid timestamp for word {index}"
+        start, end = float(start), float(end)
+        if (
+            not math.isfinite(start)
+            or not math.isfinite(end)
+            or start < 0
+            or start > end
+            or end > duration_s + 0.05
+        ):
             return f"Cannot export captions: invalid timestamp for word {index}"
         if previous_start is not None and start < previous_start:
             return f"Cannot export captions: non-monotonic timestamp at word {index}"
@@ -47,17 +50,19 @@ def inspected_words(transcript: TranscriptionResult, duration_s: float):
     cleaned: list[TimedWord] = []
     warnings = []
     invalid = nonmono = 0
-    prev_start = None
-    prev_end = None
+    prev_start: float | None = None
+    prev_end: float | None = None
     for i, word in enumerate(transcript.words):
         start, end = word.start_s, word.end_s
         valid = (
             start is not None
             and end is not None
-            and all(
-                isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
-                for x in (start, end)
-            )
+            and isinstance(start, (int, float))
+            and not isinstance(start, bool)
+            and isinstance(end, (int, float))
+            and not isinstance(end, bool)
+            and math.isfinite(start)
+            and math.isfinite(end)
             and start >= 0
             and start <= end
             and end <= duration_s + 0.05
@@ -65,10 +70,12 @@ def inspected_words(transcript: TranscriptionResult, duration_s: float):
         if (start is not None or end is not None) and not valid:
             invalid += 1
             warnings.append({"code": "invalid_word_timestamp", "word_index": i})
-        if valid and prev_start is not None and start < prev_start:
-            nonmono += 1
-            warnings.append({"code": "non_monotonic_timestamp", "word_index": i})
         if valid:
+            assert start is not None and end is not None
+            start, end = float(start), float(end)
+            if prev_start is not None and start < prev_start:
+                nonmono += 1
+                warnings.append({"code": "non_monotonic_timestamp", "word_index": i})
             if prev_end is not None:
                 if start < prev_end - 0.01:
                     warnings.append(
