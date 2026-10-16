@@ -16,9 +16,9 @@ For Parakeet Redux transcription:
 pip install 'speechscope[redux]'
 ```
 
-For the external whisper.cpp backend, install whisper.cpp separately and provide a local model; SpeechScope does not download weights. See [whisper.cpp integration](docs/whispercpp-integration.md) for build, environment, and usage instructions. SpeechScope prepares mono 16 kHz PCM16 WAV internally, so FFmpeg is not required.
+For the external whisper.cpp backend, install whisper.cpp separately. You can manage pinned GGML models with `speechscope models` or supply your own local model path. See [model management](docs/model-management.md) and [whisper.cpp integration](docs/whispercpp-integration.md). SpeechScope prepares mono 16 kHz PCM16 WAV internally, so FFmpeg is not required.
 
-Python 3.11+ is supported. The optional Redux integration uses Moondream/Parakeet Redux; its first inference may download model weights to Moondream's managed cache. The `whispercpp` backend uses an external `whisper-cli` and a user-provided local model, with no automatic model downloads. Import and backend discovery do not initialize a model or execute the CLI.
+Python 3.11+ is supported. Redux continues to delegate model acquisition and cache ownership to Photon; SpeechScope does not enumerate or remove Photon files. whisper.cpp GGML models can be explicitly installed and verified through the model catalog, while inference itself never downloads or refreshes a catalog or weights. Import and backend discovery do not initialize a model or execute the CLI.
 
 ## CLI
 
@@ -27,6 +27,10 @@ speechscope backends list --format json
 speechscope doctor --backend redux
 speechscope doctor --backend whispercpp
 speechscope transcribe speech.wav --backend whispercpp --model /path/to/ggml-model.bin --device cpu --format json
+speechscope models list --backend whispercpp
+speechscope models install whispercpp:base.en-q5_1
+speechscope models verify whispercpp:base.en-q5_1
+speechscope transcribe speech.wav --backend whispercpp --model whispercpp:base.en-q5_1 --device cpu
 speechscope metrics list
 speechscope transcribe speech.wav --backend redux --format json --srt speech.srt
 speechscope analyze speech.wav --text-file expected.txt --format json --json report.json
@@ -34,6 +38,10 @@ speechscope analyze speech.wav --text-file expected.txt --thresholds examples/po
 ```
 
 `verify` is a compatibility alias for `analyze`. Transcription-only reports omit reference metrics and alignment. No threshold policy means `not_evaluated`, not `pass`. JSON stdout is one complete report; diagnostics go to stderr. Exit codes: 0 success/review/not-evaluated, 1 policy failure, 2 invalid input/export, 3 backend unavailable/unsupported, 4 inference failure, 5 unexpected error. Redux `doctor` checks dependency metadata only; it does not initialize Photon, access weights, or verify hardware readiness.
+
+## Model catalog and management
+
+The metadata-only [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog) lists pinned whisper.cpp and Redux models. Model acquisition is explicit; transcription never downloads a catalog or model. See [model management](docs/model-management.md) for catalog caching, offline use, integrity checks, commands, and cache ownership. Redux remains runtime-managed by Photon; SpeechScope cannot inspect or remove its cache.
 
 ## Strict and compound-aware comparison
 

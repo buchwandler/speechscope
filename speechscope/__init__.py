@@ -20,10 +20,17 @@ from .errors import (
     InvalidAudioError,
     InvalidReferenceError,
     InvalidThresholdPolicyError,
+    ModelCatalogError,
+    ModelError,
+    ModelIntegrityError,
+    ModelNotFoundError,
+    ModelNotInstalledError,
+    ModelNotManagedError,
     SpeechScopeError,
     TranscriptionError,
     UnsupportedBackendOptionError,
 )
+from .models import ModelCatalogClient, ModelManager, ModelStore
 from .registry import available_backends, backend_info, register_backend
 from .types import (
     AlignedWord,
@@ -50,6 +57,15 @@ __all__ = [
     "InvalidAudioError",
     "InvalidReferenceError",
     "InvalidThresholdPolicyError",
+    "ModelCatalogClient",
+    "ModelCatalogError",
+    "ModelError",
+    "ModelIntegrityError",
+    "ModelManager",
+    "ModelNotFoundError",
+    "ModelNotInstalledError",
+    "ModelNotManagedError",
+    "ModelStore",
     "SpeechScopeError",
     "SpeechTranscriber",
     "ThresholdPolicy",

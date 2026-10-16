@@ -94,12 +94,16 @@ def probe_executable(executable: str | None = None) -> tuple[str, str | None]:
     )
 
 
-def _model_path(model: str | None) -> str:
+def _model_path(model: str | None, *, cache_dir=None) -> str:
     selected = model if model is not None else os.environ.get(MODEL_ENV)
     if not isinstance(selected, str) or not selected.strip():
         raise BackendUnavailableError(
             f"Provide a local whisper.cpp model with --model or set {MODEL_ENV}"
         )
+    if selected.startswith("whispercpp:"):
+        from ..models import ModelStore
+
+        return str(ModelStore(cache_dir).path(selected))
     path = Path(selected).expanduser()
     if not path.is_file():
         raise BackendUnavailableError(f"whisper.cpp model file does not exist: {path}")
@@ -224,16 +228,21 @@ class WhisperCppTranscriber:
     """Run whisper.cpp as a local CLI process for each transcription call."""
 
     def __init__(self, *, device: str = "cpu", model: str | None = None, cache_dir=None):
-        if cache_dir is not None:
+        selected_model = model if model is not None else os.environ.get(MODEL_ENV)
+        managed_ref = isinstance(selected_model, str) and selected_model.startswith("whispercpp:")
+        if cache_dir is not None and not managed_ref:
             raise UnsupportedBackendOptionError(
-                "whispercpp does not support cache_dir; model files are supplied explicitly"
+                "whispercpp does not support cache_dir for explicit model paths"
             )
         if device not in ("cpu", "auto"):
             raise UnsupportedBackendOptionError(
                 f"whispercpp supports only cpu and auto devices, not {device!r}"
             )
         self._device = device
-        self._model = _model_path(model)
+        self._model = _model_path(selected_model, cache_dir=cache_dir)
+        self._model_label = (
+            selected_model if managed_ref and isinstance(selected_model, str) else self._model
+        )
         self._executable = resolve_executable()
 
     def info(self) -> BackendInfo:
@@ -285,7 +294,7 @@ class WhisperCppTranscriber:
                 raise TranscriptionError(
                     f"whisper-cli exited with status {completed.returncode}{suffix}"
                 )
-            result = _parse_output(output_json, audio, self._model, self._device)
+            result = _parse_output(output_json, audio, self._model_label, self._device)
             return TranscriptionResult(
                 text=result.text,
                 words=result.words,

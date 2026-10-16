@@ -10,7 +10,7 @@ Redux receives the original encoded WAV path and requests native word timestamps
 
 ## whisper.cpp
 
-`whispercpp` is a built-in adapter for the external `whisper-cli` executable; no Python extra is required. Configure the executable with `SPEECHSCOPE_WHISPERCPP_BIN` (default `whisper-cli`) and a local ggml/gguf model with `SPEECHSCOPE_WHISPERCPP_MODEL` or the explicit API/CLI `model` / `--model` option. An explicit model overrides the environment value. SpeechScope does not download weights; `cache_dir` is unsupported.
+`whispercpp` is a built-in adapter for the external `whisper-cli` executable; no Python extra is required. Configure the executable with `SPEECHSCOPE_WHISPERCPP_BIN` (default `whisper-cli`). Use a local model path with `SPEECHSCOPE_WHISPERCPP_MODEL` or the explicit API/CLI `model` / `--model` option, or install a pinned catalog model with `speechscope models install whispercpp:<id>` and pass that reference. Explicit paths override the environment value. `cache_dir` is supported only for managed refs; local paths retain the existing unsupported-option error. See [model management](model-management.md) for catalog and cache behavior.
 
 Before inference, the adapter materializes an ephemeral mono 16 kHz WAV/PCM16 from `AudioInput.samples` using AudioSig resampling when needed. It does not trim, pad, normalize, or apply VAD. `provenance.backend_audio_input` describes that generated representation while `input.audio_path` and `input.duration_s` continue to identify the original file and duration. `cpu` passes `--no-gpu`; `auto` leaves acceleration selection to the local build. Other device names are not supported by this adapter.
 

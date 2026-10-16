@@ -12,7 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{name = "Holger Nahrstaedt"}]
 keywords = ["speech", "asr", "transcription", "word-error-rate", "timestamps", "audio-quality"]
-dependencies = ["numpy>=1.24", "soundfile>=0.12", "audiosig>=0.1.6,<0.2"]
+dependencies = ["numpy>=1.24", "platformdirs>=4,<5", "soundfile>=0.12", "audiosig>=0.1.6,<0.2"]
 classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Topic :: Multimedia :: Sound/Audio", "Typing :: Typed"]
 
 [project.optional-dependencies]

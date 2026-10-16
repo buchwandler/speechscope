@@ -19,6 +19,7 @@ from .errors import (
     InvalidAudioError,
     InvalidReferenceError,
     InvalidThresholdPolicyError,
+    ModelError,
     TranscriptionError,
     UnsupportedBackendOptionError,
 )
@@ -75,6 +76,40 @@ def _parser() -> argparse.ArgumentParser:
     metrics = commands.add_parser("metrics")
     metrics.add_argument("action", choices=("list",))
     metrics.add_argument("--format", choices=("json", "human"), default="human")
+    models = commands.add_parser("models", help="Discover and manage catalogued models")
+    model_sub = models.add_subparsers(dest="models_action", required=True)
+
+    def add_model_options(action, *, backend=False, force=False):
+        if backend:
+            action.add_argument("--backend")
+        action.add_argument("--catalog", help="Local catalog path or HTTPS catalog URL")
+        action.add_argument("--cache-dir", type=Path, help="SpeechScope model/catalog cache root")
+        action.add_argument("--offline", action="store_true", help="Use only a cached catalog")
+        action.add_argument("--refresh", action="store_true", help="Refresh the remote catalog")
+        action.add_argument("--format", choices=("human", "json"), default="human")
+        if force:
+            action.add_argument(
+                "--force", action="store_true", help="Replace a verified managed install"
+            )
+
+    list_models = model_sub.add_parser("list", help="List catalog models")
+    add_model_options(list_models, backend=True)
+    show_model = model_sub.add_parser("show", help="Show catalog metadata for a model")
+    show_model.add_argument("ref")
+    add_model_options(show_model, backend=True)
+    install_model = model_sub.add_parser("install", help="Download and verify a managed model")
+    install_model.add_argument("ref")
+    add_model_options(install_model, backend=True, force=True)
+    installed_models = model_sub.add_parser("installed", help="List SpeechScope-managed models")
+    add_model_options(installed_models)
+    for action_name, help_text in (
+        ("path", "Print the primary installed model path"),
+        ("verify", "Verify installed model bytes"),
+        ("remove", "Remove a SpeechScope-managed model"),
+    ):
+        action = model_sub.add_parser(action_name, help=help_text)
+        action.add_argument("ref")
+        add_model_options(action, backend=True)
     return parser
 
 
@@ -85,9 +120,97 @@ def _emit(data, fmt):
         print(data)
 
 
+def _run_models(args) -> int:
+    from .models import ModelManager
+
+    manager = ModelManager(
+        catalog=args.catalog,
+        cache_dir=args.cache_dir,
+        offline=args.offline,
+        refresh=args.refresh,
+    )
+    action = args.models_action
+    if action == "list":
+        models = manager.list(backend=args.backend)
+        if args.format == "json":
+            _emit(models, "json")
+        elif not models:
+            print("No models found.")
+        else:
+            for model in models:
+                mode = model["acquisition"]["mode"]
+                print(f"{model['ref']}  {model['format']}  {mode}  {model['description']}")
+        return 0
+    if action == "show":
+        model = manager.show(args.ref, backend=args.backend)
+        if args.format == "json":
+            _emit(model, "json")
+        else:
+            source = model["source"]
+            print(f"Reference: {model['ref']}")
+            print(f"Backend: {model['backend']}")
+            print(f"Format: {model['format']}")
+            print(f"Acquisition: {model['acquisition']['mode']}")
+            print(f"Source: {source['repository']}@{source['revision']}")
+            print(f"License: {source['license']}")
+            print(f"Description: {model['description']}")
+            for artifact in model["artifacts"]:
+                role = "primary" if artifact["primary"] else artifact["role"]
+                print(f"Artifact: {artifact['path']} ({role})")
+        return 0
+    if action == "install":
+        path = manager.install(args.ref, backend=args.backend, force=args.force)
+        if args.format == "json":
+            _emit(
+                {"ref": manager.show(args.ref, backend=args.backend)["ref"], "path": str(path)},
+                "json",
+            )
+        else:
+            print(f"Installed {args.ref} at {path}")
+        return 0
+    if action == "installed":
+        installed = manager.installed()
+        if args.format == "json":
+            _emit(installed, "json")
+        elif not installed:
+            print("No SpeechScope-managed models installed.")
+        else:
+            for item in installed:
+                primary = next(artifact for artifact in item["artifacts"] if artifact["primary"])
+                print(
+                    f"{item['ref']}  {manager.store.models_dir / item['backend'] / item['id'] / primary['path']}"
+                )
+        return 0
+    if action == "path":
+        path = manager.path(args.ref, backend=args.backend)
+        if args.format == "json":
+            _emit({"ref": args.ref, "path": str(path)}, "json")
+        else:
+            print(path)
+        return 0
+    if action == "verify":
+        result = manager.verify(args.ref, backend=args.backend)
+        if args.format == "json":
+            _emit(result, "json")
+        else:
+            print(f"Verified {result['ref']} ({len(result['artifacts'])} artifact(s))")
+        return 0
+    if action == "remove":
+        model = manager.show(args.ref, backend=args.backend)
+        manager.remove(args.ref, backend=args.backend)
+        if args.format == "json":
+            _emit({"ref": model["ref"], "removed": True}, "json")
+        else:
+            print(f"Removed {model['ref']}")
+        return 0
+    raise AssertionError(f"Unknown models action: {action}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "models":
+            return _run_models(args)
         if args.command == "backends":
             if args.action == "list":
                 data: list[dict[str, object]] | dict[str, object] = [
@@ -226,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.verbose and result.diagnostics:
             print(json.dumps(result.diagnostics, indent=2), file=sys.stderr)
         return 1 if result.evaluation["status"] == "fail" else 0
+    except ModelError as exc:
+        print(f"speechscope: {exc}", file=sys.stderr)
+        return 3
     except (
         AlignmentTooLargeError,
         InvalidAudioError,

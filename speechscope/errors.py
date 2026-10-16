@@ -5,6 +5,30 @@ class SpeechScopeError(Exception):
     """Base class for expected failures."""
 
 
+class ModelError(SpeechScopeError):
+    """Base class for expected model-management failures."""
+
+
+class ModelCatalogError(ModelError):
+    pass
+
+
+class ModelNotFoundError(ModelError):
+    pass
+
+
+class ModelNotInstalledError(ModelError):
+    pass
+
+
+class ModelIntegrityError(ModelError):
+    pass
+
+
+class ModelNotManagedError(ModelError):
+    pass
+
+
 class InvalidAudioError(SpeechScopeError):
     pass
 

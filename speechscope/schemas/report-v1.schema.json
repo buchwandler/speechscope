@@ -262,8 +262,12 @@
           ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "enum": ["encoded_wav_path", "generated_wav_path", "audio_input"] },
-            "selection": { "enum": ["encoded_path", "canonicalized_wav", "provider_defined"] },
+            "kind": {
+              "enum": ["encoded_wav_path", "generated_wav_path", "audio_input"]
+            },
+            "selection": {
+              "enum": ["encoded_path", "canonicalized_wav", "provider_defined"]
+            },
             "source_path": { "type": "string" },
             "sample_rate_hz": { "type": "integer", "minimum": 1 },
             "channels": { "type": "integer", "minimum": 1 },
