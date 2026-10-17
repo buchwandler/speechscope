@@ -1,0 +1,66 @@
+rows:
+  - sha: 76ea52c80929640e5b2b1384958230541514cad7
+    inspected: true
+    inspected_paths:
+      - speechscope/backends/whispercpp.py
+      - speechscope/backend_audio.py
+      - docs/whispercpp-integration.md
+      - docs/backends.md
+      - tests/test_whispercpp.py
+      - tests/test_backend_audio.py
+    observed_behavior: >-
+      Provides a local whisper.cpp transcription adapter that validates the executable,
+      accepts explicit or environment-selected models, converts input to an ephemeral
+      mono 16 kHz PCM16 WAV, parses structured JSON text and language, and records
+      backend audio transformations while reporting timing as unavailable.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: >-
+      Reviewed implementation, integration documentation, and synthetic/fake-CLI tests.
+    stale: false
+  - sha: 377e6579844852f8e612d111646514058fa2c526
+    inspected: true
+    inspected_paths:
+      - speechscope/models.py
+      - docs/model-management.md
+      - docs/backends.md
+      - tests/test_models.py
+      - tests/test_whispercpp_models.py
+    observed_behavior: >-
+      Adds catalog validation and model lifecycle commands for explicitly managed
+      whisper.cpp artifacts, including pinned HTTPS sources, exact size and SHA-256
+      verification, staging before activation, ownership manifests, safe removal, and
+      offline catalog use.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: >-
+      Reviewed model management implementation, documentation, and lifecycle tests.
+    stale: false
+  - sha: 78795206a6e8e82f98b2b324c9d51faef32c46c7
+    inspected: true
+    inspected_paths:
+      - speechscope/backends/whispercpp.py
+      - speechscope/models.py
+      - speechscope/cli.py
+      - speechscope/data/model-catalog-v1.json
+      - docs/whispercpp-integration.md
+      - docs/model-management.md
+      - tests/test_whispercpp.py
+      - tests/test_whispercpp_models.py
+    observed_behavior: >-
+      Completes the packaged catalog and managed-reference integration so inference and
+      doctor use the local snapshot without fetching or silently installing weights;
+      readiness checks report executable, device, catalog, installation, and integrity
+      state, while explicit local model paths remain supported.
+    public_impact: public
+    decision: accepted
+    target_entry_key: null
+    target_entry_id: null
+    notes: >-
+      Reviewed packaged catalog behavior, CLI doctor/model paths, documentation, and
+      offline/integrity tests.
+    stale: false

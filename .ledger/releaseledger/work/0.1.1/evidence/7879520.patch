@@ -1,0 +1,1871 @@
+ README.md                              |  12 +-
+ docs/backends.md                       |   8 +-
+ docs/model-management.md               |  95 +++++++---
+ docs/whispercpp-integration.md         |  28 +--
+ pyproject.toml                         |   2 +-
+ speechscope/backends/whispercpp.py     |  93 ++--------
+ speechscope/cli.py                     | 148 +++++++++++++--
+ speechscope/data/model-catalog-v1.json | 317 +++++++++++++++++++++++++++++++++
+ speechscope/models.py                  | 218 +++++++++++++++++++----
+ tests/test_models.py                   | 113 +++++++++++-
+ tests/test_packaging.py                |   6 +
+ tests/test_whispercpp.py               | 150 +++++++++++++++-
+ tests/test_whispercpp_models.py        |  35 +++-
+ 13 files changed, 1037 insertions(+), 188 deletions(-)
+
+diff --git a/README.md b/README.md
+index de9ca66..4160641 100644
+--- a/README.md
++++ b/README.md
+@@ -26,11 +26,13 @@ Python 3.11+ is supported. Redux continues to delegate model acquisition and cac
+ speechscope backends list --format json
+ speechscope doctor --backend redux
+ speechscope doctor --backend whispercpp
++
++speechscope doctor --backend whispercpp --model whispercpp:tiny.en-q5_1 --device cpu --format json
+ speechscope transcribe speech.wav --backend whispercpp --model /path/to/ggml-model.bin --device cpu --format json
+ speechscope models list --backend whispercpp
+-speechscope models install whispercpp:base.en-q5_1
+-speechscope models verify whispercpp:base.en-q5_1
+-speechscope transcribe speech.wav --backend whispercpp --model whispercpp:base.en-q5_1 --device cpu
++speechscope models install whispercpp:tiny.en-q5_1
++speechscope models verify whispercpp:tiny.en-q5_1
++speechscope transcribe speech.wav --backend whispercpp --model whispercpp:tiny.en-q5_1 --device cpu
+ speechscope metrics list
+ speechscope transcribe speech.wav --backend redux --format json --srt speech.srt
+ speechscope analyze speech.wav --text-file expected.txt --format json --json report.json
+@@ -41,7 +43,7 @@ speechscope analyze speech.wav --text-file expected.txt --thresholds examples/po
+
+ ## Model catalog and management
+
+-The metadata-only [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog) lists pinned whisper.cpp and Redux models. Model acquisition is explicit; transcription never downloads a catalog or model. See [model management](docs/model-management.md) for catalog caching, offline use, integrity checks, commands, and cache ownership. Redux remains runtime-managed by Photon; SpeechScope cannot inspect or remove its cache.
++SpeechScope packages an offline snapshot of the metadata-only [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog), which lists pinned whisper.cpp and Redux models. Catalogued whisper.cpp refs resolve only to already-installed, verified weights; inference never fetches catalog metadata or downloads/updates models. `SPEECHSCOPE_MODEL_HOME` selects the managed model root (explicit `--cache-dir`/API `cache_dir` overrides it). Catalog updates require a reviewed snapshot refresh; callers must pin the model used for their own content gate. See [model management](docs/model-management.md) for catalog refresh, secure installation, offline use, and cache ownership. Redux remains runtime-managed by Photon; SpeechScope cannot inspect or remove its cache.
+
+ ## Strict and compound-aware comparison
+
+@@ -82,6 +84,8 @@ Word alignment work is bounded by `(reference length + 1) * (hypothesis length +
+
+ Word timestamps are **ASR estimates**, not ground-truth forced alignment. Only unambiguous one-to-one normalized ASR word/token correspondence permits timestamp projection. For example, a native `end-to-end` timestamp does not establish separate timestamps for normalized `end`, `to`, `end` tokens; those token timings remain unavailable. Invalid timing is diagnosed. `reference_timestamp_coverage_ratio` measures usable ASR timing, not textual correctness. Original audio time is preserved.
+
++The built-in whisper.cpp adapter currently returns recognized text and detected language without word or segment timing; its reports mark timing unavailable. Redux supports native word timestamps. Check backend metadata rather than assuming every backend provides timing.
++
+ Reports use the packaged [report-v1 schema](docs/report-schema.md). Transcription-only mode has `reference=null`, `metrics=null`, and an empty alignment. `provenance.backend_audio_input` records which audio representation a backend received. CSV/SRT/VTT use recognized text, and individual file writes are atomic.
+
+ ## Redux evidence
+diff --git a/docs/backends.md b/docs/backends.md
+index 4442eb5..e290765 100644
+--- a/docs/backends.md
++++ b/docs/backends.md
+@@ -10,11 +10,13 @@ Redux receives the original encoded WAV path and requests native word timestamps
+
+ ## whisper.cpp
+
+-`whispercpp` is a built-in adapter for the external `whisper-cli` executable; no Python extra is required. Configure the executable with `SPEECHSCOPE_WHISPERCPP_BIN` (default `whisper-cli`). Use a local model path with `SPEECHSCOPE_WHISPERCPP_MODEL` or the explicit API/CLI `model` / `--model` option, or install a pinned catalog model with `speechscope models install whispercpp:<id>` and pass that reference. Explicit paths override the environment value. `cache_dir` is supported only for managed refs; local paths retain the existing unsupported-option error. See [model management](model-management.md) for catalog and cache behavior.
++`whispercpp` is a built-in adapter for the external `whisper-cli` executable; no Python extra is required. Configure the executable with `SPEECHSCOPE_WHISPERCPP_BIN` (default `whisper-cli`). Use a local model path with `SPEECHSCOPE_WHISPERCPP_MODEL` or the explicit API/CLI `model` / `--model` option, or install a pinned packaged-catalog model with `speechscope models install whispercpp:<id>` and pass its canonical ref. Explicit paths override the environment value. Managed refs must already be installed and pass manifest/catalog/digest verification; inference does not fetch a catalog or weights. `cache_dir` is supported only for managed refs; local paths retain the unsupported-option error. See [model management](model-management.md) for model-home and catalog behavior.
+
+ Before inference, the adapter materializes an ephemeral mono 16 kHz WAV/PCM16 from `AudioInput.samples` using AudioSig resampling when needed. It does not trim, pad, normalize, or apply VAD. `provenance.backend_audio_input` describes that generated representation while `input.audio_path` and `input.duration_s` continue to identify the original file and duration. `cpu` passes `--no-gpu`; `auto` leaves acceleration selection to the local build. Other device names are not supported by this adapter.
+
+-Backend listing does not execute `whisper-cli` or inspect a model. `speechscope doctor --backend whispercpp` checks that the executable runs and supports `--version` or `--help`; it does not require or load a model. Real inference is opt-in and should be tested with an operator-supplied, rights-cleared fixture. ARM64/Termux support is not claimed without platform-specific evidence; see [whisper.cpp integration](whispercpp-integration.md).
++Whisper.cpp JSON text and language are exposed, but SpeechScope does not yet reconstruct tested word timing or expose segment objects. Its backend metadata therefore advertises neither word nor segment timestamps; reports use `words=[]` and `timing_source="unavailable"`. Do not use whisper.cpp timing to satisfy timestamp-coverage requirements until a tested word-reconstruction implementation is added.
++
++Backend listing does not execute `whisper-cli` or inspect a model. `speechscope doctor --backend whispercpp` checks the executable with `--version` or `--help`. With `--model <ref>`, doctor also checks device support, packaged-catalog membership, managed installation, manifest/artifact digests, and primary-artifact readability. `--format json` emits structured readiness data. Doctor does not download or run inference, though it reads installed model bytes to recompute their digest. Real inference is opt-in and should use an operator-supplied rights-cleared fixture. ARM64/Termux support is not claimed without platform-specific evidence; see [whisper.cpp integration](whispercpp-integration.md).
+
+ ## Provider protocol
+
+@@ -36,7 +38,7 @@ from speechscope import register_backend
+ register_backend("my-provider", lambda **options: MyTranscriber(**options))
+ ```
+
+-For an installed package, publish an entry point in the `speechscope.backends` group. Backend names are unique; `redux` is reserved. Discovery exposes metadata but does not create a provider instance. See `examples/custom_backend.py` for a short runnable fake provider.
++For an installed package, publish an entry point in the `speechscope.backends` group. Backend names are unique; `redux` and `whispercpp` are reserved. Discovery exposes metadata but does not create a provider instance. See `examples/custom_backend.py` for a short runnable fake provider.
+
+ ## Session lifecycle and testing
+
+diff --git a/docs/model-management.md b/docs/model-management.md
+index a726cf9..b96b763 100644
+--- a/docs/model-management.md
++++ b/docs/model-management.md
+@@ -1,61 +1,100 @@
+ # Model catalog and management
+
+-SpeechScope uses a metadata-only catalog to describe compatible models. Model downloads are explicit: inference does not fetch or refresh catalog metadata and never downloads model weights.
++SpeechScope ships a packaged snapshot of the normalized [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog). Catalog metadata pins upstream revisions, artifact URLs, sizes, and digests. Model acquisition is explicit: normal transcription and model-aware doctor checks use local catalog metadata and never download or refresh it.
+
+ ## Ownership
+
+-- `whispercpp` GGML artifacts are **managed** by SpeechScope. It downloads pinned artifacts, verifies size and SHA-256, writes an ownership manifest, and supports inventory, path lookup, verification, and removal.
+-- `redux:parakeet-redux` is **runtime-managed** by Photon. SpeechScope can show its catalog metadata, but cannot install it, enumerate the Photon cache, resolve a SpeechScope-owned path, verify Photon files, or remove them. Redux inference continues to pass `moondream/parakeet-redux` to Photon.
+-- User-supplied whisper.cpp model paths remain supported and are not imported into SpeechScope's managed store.
++- `whispercpp` GGML artifacts are **managed** by SpeechScope. An explicit `speechscope models install` downloads them, verifies exact size and SHA-256, and activates a manifest-owned installation.
++- `redux:parakeet-redux` is **runtime-managed** by Photon. SpeechScope can display its catalog metadata, but cannot install, enumerate, resolve, verify, or remove Photon-owned files.
++- A user-supplied whisper.cpp model path remains supported and is never copied into SpeechScope's managed store.
+
+-The MVP catalog is [speechscope-model-catalog](https://github.com/buchwandler/speechscope-model-catalog). It pins upstream repository revisions, license identifiers, artifact URLs, sizes, and hashes. Catalog membership is not an assertion that SpeechScope owns the runtime's cache.
++## Model home
++
++The managed model root is selected in this order:
++
++1. An explicit `--cache-dir` CLI option or API `cache_dir` value.
++2. `SPEECHSCOPE_MODEL_HOME`.
++3. The platform cache directory selected by `platformdirs`.
++
++The configured directory is the model home itself. A managed install has a stable structure:
++
++```text
++<SPEECHSCOPE_MODEL_HOME>/
++  whispercpp/
++    tiny.en-q5_1/
++      install.json
++      ggml-tiny.en-q5_1.bin
++```
++
++`--cache-dir` and `cache_dir` remain supported as explicit model-home overrides. Explicit per-command catalog downloads are cached separately below `<model-home>/catalogs/`.
+
+ ## Commands
+
+ ```bash
+ speechscope models list
+ speechscope models list --backend whispercpp --format json
+-speechscope models show whispercpp:base.en-q5_1
+-speechscope models install whispercpp:base.en-q5_1
+-speechscope models installed
+-speechscope models path whispercpp:base.en-q5_1
+-speechscope models verify whispercpp:base.en-q5_1
+-speechscope models remove whispercpp:base.en-q5_1
++speechscope models show whispercpp:tiny.en-q5_1
++speechscope models install whispercpp:tiny.en-q5_1
++speechscope models verify whispercpp:tiny.en-q5_1
++speechscope models path whispercpp:tiny.en-q5_1
++speechscope models remove whispercpp:tiny.en-q5_1
+
+-speechscope transcribe speech.wav \
++speechscope doctor \
+   --backend whispercpp \
+-  --model whispercpp:base.en-q5_1 \
+-  --device cpu
++  --model whispercpp:tiny.en-q5_1 \
++  --device cpu \
++  --format json
+ ```
+
+-The canonical reference form is `<backend>:<id>`. Unambiguous catalog aliases (such as `base.en`) are accepted by catalog operations; use canonical refs to avoid ambiguity. Model-management errors are printed as user-facing errors rather than tracebacks.
++The canonical reference is `<backend>:<id>`. Unambiguous aliases may be used interactively; JSON output always reports the canonical ref. `models install --force` replaces an existing owned install only after downloading and verifying the replacement in staging. A valid existing install is idempotent and does not download the weights again.
+
+-Catalog-reading commands (`list`, `show`, and `install`) accept `--catalog PATH_OR_HTTPS_URL`, `--cache-dir DIR`, `--offline`, and `--refresh`; `list`, `show`, and `install` also accept `--backend` and `--format human|json`. `install` accepts `--force` to replace an existing SpeechScope-managed installation after the replacement has been downloaded and verified. `installed`, `path`, `verify`, and `remove` also accept `--cache-dir` and `--format`; `path`, `verify`, and `remove` accept `--backend`. These commands operate only on SpeechScope manifests and never remove an arbitrary path.
++The catalog's `whispercpp:tiny.en-q5_1` model is the smallest English-specific quantized candidate in the supplied catalog (about 30.68 MiB). It is a lightweight smoke-test candidate, not an automatic default or a guarantee that it passes a downstream content gate. The caller selects and pins the model used for production validation. SpeechScope never silently upgrades or falls back to a larger model.
+
+-For development and controlled deployments, `--catalog` can name a local JSON file. `SPEECHSCOPE_MODEL_CATALOG` provides the same default-source override for CLI and API calls. The built-in URL is:
++## Catalog snapshot and refresh
+
+-```text
+-https://raw.githubusercontent.com/buchwandler/speechscope-model-catalog/main/catalog/models.json
++The separate `speechscope-model-catalog` repository is the metadata source of truth. `speechscope/data/model-catalog-v1.json` is a generated, byte-for-byte snapshot of its normalized `catalog/models.json`; do not maintain a second independent catalog by hand. When adopting a catalog release, from the SpeechScope checkout refresh it from the sibling catalog checkout, for example:
++
++```bash
++cp ../speechscope-model-catalog/catalog/models.json speechscope/data/model-catalog-v1.json
++python -m json.tool speechscope/data/model-catalog-v1.json >/dev/null
++python -m pytest -q tests/test_models.py tests/test_packaging.py
+ ```
+
+-The default remote catalog is cached at `<cache-root>/catalogs/models.json`; overridden remote URLs use URL-specific hashed cache filenames. `--offline` uses that cached catalog and fails clearly if none exists; a local catalog path is read directly. `--refresh` explicitly fetches the remote catalog instead of using a cached copy and cannot be combined with `--offline`. The cache root defaults to the platform-specific SpeechScope user cache directory (`platformdirs`); `--cache-dir` or the API's `cache_dir` overrides it. Managed files are installed below `<cache-root>/models/<backend>/<id>/`.
++Review the catalog diff and package test results with the catalog release. The snapshot is included in both wheel and sdist; model weights are never package data.
+
+-## Integrity and removal
++By default, `models list` and `models show` read the packaged snapshot without network access. Catalog-management commands accept `--catalog PATH_OR_HTTPS_URL`, `--offline`, and `--refresh`. `SPEECHSCOPE_MODEL_CATALOG` may override that source for catalog-management CLI/API calls; an explicit HTTPS source can be fetched when the caller runs a catalog operation. `--refresh` explicitly requests a fresh remote catalog and cannot be combined with `--offline`. Whisper.cpp inference and `doctor` always use the packaged catalog, even if that environment variable names a remote URL.
+
+-Managed catalog artifacts must use HTTPS Hugging Face URLs pinned to the model's full upstream revision, safe relative paths, positive byte sizes, and SHA-256 digests. Installation streams each artifact into a staging directory and verifies exact size and hash before activating the install. Failed or mismatched downloads are removed without activating an installation.
++## Integrity, activation, and removal
+
+-Each installation has a `.speechscope-model.json` manifest containing the canonical ref and verified artifact metadata. `models installed` enumerates only directories with a valid SpeechScope manifest. `models verify` recomputes every installed artifact's size and SHA-256. `models remove` deletes only the corresponding manifest-owned model directory; it will not follow symbolic links or recursively delete an arbitrary supplied path. Catalog integrity is relative to the catalog snapshot and does not authenticate a compromised catalog source.
++Managed catalog artifacts must have safe relative paths, HTTPS Hugging Face URLs pinned to the full source revision, positive byte sizes, and SHA-256 digests. Installation streams each artifact to a staging directory, checks its exact byte count and digest, and writes `install.json` with the canonical ref, catalog schema, source repository/revision, artifact paths/sizes/digests, install timestamp, and SpeechScope version. The final model directory is activated only after every artifact has passed verification; failed downloads clean their staging data.
++
++`models verify` re-hashes installed bytes instead of trusting the manifest. `models path` also verifies the installation before returning the readable primary artifact. An invalid existing installation fails by default; `--force` can replace it only when a valid ownership manifest identifies the existing directory. An unowned directory is never recursively deleted. `models remove` deletes only the manifest-owned model directory and refuses runtime-managed or arbitrary paths.
++
++Catalog integrity is relative to the selected catalog snapshot; it does not authenticate a compromised catalog source. Keep the catalog repository and its release review in the trust chain.
+
+ ## Inference and local paths
+
+-Installing a model is an explicit provisioning step. A server can install weights during image/build setup and then run offline:
++Install weights during an explicit provisioning step, then run offline:
++
++```bash
++export SPEECHSCOPE_MODEL_HOME="$PWD/.ci-cache/speechscope-models"
++speechscope models install whispercpp:tiny.en-q5_1
++speechscope transcribe speech.wav \
++  --backend whispercpp \
++  --model whispercpp:tiny.en-q5_1 \
++  --device cpu
++```
++
++A canonical model ref resolves only to a catalogued, already-installed, verified managed model. Inference does not fetch the catalog or download weights. Use an explicit local file path as an escape hatch for models outside the packaged catalog:
+
+ ```bash
+-speechscope models install whispercpp:tiny-q5_1
+-speechscope transcribe speech.wav --backend whispercpp --model whispercpp:tiny-q5_1
++speechscope transcribe speech.wav \
++  --backend whispercpp \
++  --model /absolute/path/to/ggml-model.bin \
++  --device cpu
+ ```
+
+-When the backend receives a `whispercpp:` ref, it resolves the already-installed primary artifact from local store state. It does not load, download, or refresh the catalog and does not download weights. With a ref, `--cache-dir` selects the SpeechScope cache root. With an explicit model file path, existing behavior remains: `--cache-dir` is unsupported.
++`whisper-cli` is an external runtime and must be installed separately; see [whisper.cpp integration](whispercpp-integration.md). `doctor --backend whispercpp --model ... --format json` checks executable availability, device support, packaged catalog membership, managed installation integrity, and primary artifact readability. It does not download or run inference; when a model is selected, it reads the installed artifact to recompute its digest.
+
+ Redux inference is unchanged and remains Photon-managed:
+
+@@ -63,4 +102,4 @@ Redux inference is unchanged and remains Photon-managed:
+ speechscope transcribe speech.wav --backend redux
+ ```
+
+-Do not infer Photon cache paths or treat `speechscope models installed` as a Photon inventory. Runtime cache status is intentionally not part of this MVP.
++Do not infer Photon cache paths or treat SpeechScope's installed-model inventory as a Photon inventory.
+diff --git a/docs/whispercpp-integration.md b/docs/whispercpp-integration.md
+index dad47d5..45461f9 100644
+--- a/docs/whispercpp-integration.md
++++ b/docs/whispercpp-integration.md
+@@ -1,6 +1,6 @@
+ # whisper.cpp integration
+
+-SpeechScope's `whispercpp` backend runs a separately installed `whisper-cli` executable with a local Whisper model. SpeechScope does not bundle whisper.cpp, download model weights, or add a Python dependency for this backend.
++SpeechScope's `whispercpp` backend runs a separately installed `whisper-cli` executable with either an explicitly supplied local model file or an already-installed, catalog-pinned managed model. SpeechScope does not bundle whisper.cpp or model weights, and adds no Python dependency for this backend. Model installation and real inference are explicit operator actions.
+
+ ## Install whisper.cpp
+
+@@ -13,20 +13,23 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
+ cmake --build build -j --config Release
+ ```
+
+-The executable is commonly at `build/bin/whisper-cli`. Obtain a model supported by that build separately and keep its local filesystem path available. SpeechScope accepts model paths; it does not download them or reinterpret `cache_dir` as a model directory.
++The executable is commonly at `build/bin/whisper-cli`. SpeechScope supports the model artifact formats accepted by the local build. For the managed catalog path, provision a catalog-pinned model separately with `speechscope models install whispercpp:<id>`; alternatively, supply your own local model file. Model installation is never triggered by transcription.
+
+ ## Configure and run
+
+-The executable defaults to `whisper-cli` on `PATH`. Override it and select a local model with environment variables:
++Provision a managed model explicitly; SpeechScope never installs or updates weights during transcription. The executable defaults to `whisper-cli` on `PATH`, and its override remains independent from model storage:
+
+ ```bash
++speechscope models install whispercpp:tiny.en-q5_1
+ export SPEECHSCOPE_WHISPERCPP_BIN="$PWD/build/bin/whisper-cli"
+-export SPEECHSCOPE_WHISPERCPP_MODEL="/path/to/ggml-tiny.en.bin"
+-speechscope doctor --backend whispercpp
++export SPEECHSCOPE_WHISPERCPP_MODEL="whispercpp:tiny.en-q5_1"
++speechscope doctor --backend whispercpp --model "$SPEECHSCOPE_WHISPERCPP_MODEL" --device cpu --format json
+ speechscope transcribe input.wav --backend whispercpp --device cpu --format json
+ ```
+
+-The explicit API `model=` value or CLI `--model` option takes precedence over `SPEECHSCOPE_WHISPERCPP_MODEL`:
++`--cache-dir` or API `cache_dir` overrides `SPEECHSCOPE_MODEL_HOME`, which overrides the platform cache directory. For example, set `SPEECHSCOPE_MODEL_HOME` before the install command to choose a dedicated store. The inference and doctor paths use the packaged catalog snapshot and do not fetch `SPEECHSCOPE_MODEL_CATALOG` even if it names a remote URL.
++
++An explicit API `model=` value or CLI `--model` option takes precedence over `SPEECHSCOPE_WHISPERCPP_MODEL`. Managed refs support `cache_dir`; explicit model file paths remain an escape hatch and reject `cache_dir`:
+
+ ```bash
+ speechscope transcribe input.wav \
+@@ -36,7 +39,7 @@ speechscope transcribe input.wav \
+   --device cpu
+ ```
+
+-Omitting `--language` asks whisper.cpp to auto-detect. `cpu` passes `--no-gpu`; `auto` omits it and lets the local whisper.cpp build choose its compiled acceleration. SpeechScope currently supports only `cpu` and `auto`; it does not advertise CUDA, MPS, Vulkan, or other upstream possibilities without adapter evidence. `cache_dir` is unsupported.
++Omitting `--language` asks whisper.cpp to auto-detect. `cpu` passes `--no-gpu`; `auto` omits it and lets the local whisper.cpp build choose its compiled acceleration. SpeechScope currently supports only `cpu` and `auto`; it does not advertise CUDA, MPS, Vulkan, or other upstream possibilities without adapter evidence. The adapter currently reports no word or segment timing.
+
+ ## Audio input and report provenance
+
+@@ -52,18 +55,23 @@ speechscope backends inspect whispercpp --format json
+ speechscope doctor --backend whispercpp
+ ```
+
+-Backend listing/inspection does not execute the CLI or access a model. `doctor` checks that the selected executable is runnable and that `--version` or, conservatively, `--help` succeeds. It does not require a model, load weights, transcribe audio, or access the network.
++Backend listing/inspection does not execute the CLI or inspect a model. `doctor` checks the selected executable with `--version` or, conservatively, `--help`. With `--model <ref>`, it also validates device support, catalog membership, managed installation integrity, artifact readability, and JSON readiness data. Doctor does not download or run inference; verifying a model does read its bytes to recompute the digest.
+
+-The ordinary test suite uses synthetic WAVs and a fake CLI, so it does not need model weights. A real integration test is opt-in and requires an operator-supplied rights-cleared WAV, an installed `whisper-cli`, a local model, the known fixture transcript, and an evidence string for the fixture rights:
++The ordinary suite uses synthetic WAVs and a fake CLI, so it needs no model weights. Real inference is opt-in and requires an already-installed managed model, an operator-supplied rights-cleared WAV, the fixture transcript, and a rights-evidence string. Provision the selected model separately before running the integration test:
+
+ ```bash
++export SPEECHSCOPE_MODEL_HOME="$PWD/.speechscope-models"
++speechscope models install whispercpp:tiny.en-q5_1
+ export SPEECHSCOPE_WHISPERCPP_BIN="/path/to/whisper-cli"
+-export SPEECHSCOPE_WHISPERCPP_MODEL="/path/to/model.bin"
++export SPEECHSCOPE_WHISPERCPP_MODEL="whispercpp:tiny.en-q5_1"
+ export SPEECHSCOPE_WHISPERCPP_FIXTURE="/path/to/authorized.wav"
+ export SPEECHSCOPE_WHISPERCPP_FIXTURE_LICENSE="license or permission record"
+ export SPEECHSCOPE_WHISPERCPP_REFERENCE="known transcript for the fixture"
++speechscope doctor --backend whispercpp --model "$SPEECHSCOPE_WHISPERCPP_MODEL" --device cpu --format json
+ export SPEECHSCOPE_RUN_WHISPERCPP_INTEGRATION=1
+ python -m pytest -q -m integration tests/test_whispercpp.py
+ ```
+
++The integration test asserts a non-empty transcript and backend/model/device provenance, but does not impose an exact recognition score.
++
+ This task has not established real model-inference or ARM64 Termux evidence. Do not infer general Linux or Termux/ARM64 support from fake-executable tests or from the presence of an upstream executable; record the exact whisper.cpp version/build, model, device, fixture rights, and target platform for any live smoke evidence.
+diff --git a/pyproject.toml b/pyproject.toml
+index a01b977..b2a2359 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -45,7 +45,7 @@ where = ["."]
+ include = ["speechscope*"]
+
+ [tool.setuptools.package-data]
+-speechscope = ["py.typed", "schemas/*.json"]
++speechscope = ["py.typed", "schemas/*.json", "data/*.json"]
+
+ [tool.setuptools_scm]
+ version_file = "speechscope/_version.py"
+diff --git a/speechscope/backends/whispercpp.py b/speechscope/backends/whispercpp.py
+index b9a677d..3e53091 100644
+--- a/speechscope/backends/whispercpp.py
++++ b/speechscope/backends/whispercpp.py
+@@ -3,19 +3,16 @@
+ from __future__ import annotations
+
+ import json
+-import math
+ import os
+ import re
+ import shutil
+ import subprocess
+ from collections.abc import Mapping
+ from pathlib import Path
+-from typing import Literal
+
+ from ..backend_audio import materialize_pcm16_wav
+ from ..errors import BackendUnavailableError, TranscriptionError, UnsupportedBackendOptionError
+-from ..normalize import normalize
+-from ..types import AudioInput, BackendAudioInput, BackendInfo, TimedWord, TranscriptionResult
++from ..types import AudioInput, BackendAudioInput, BackendInfo, TranscriptionResult
+
+ BACKEND_NAME = "whispercpp"
+ DEFAULT_EXECUTABLE = "whisper-cli"
+@@ -28,7 +25,6 @@ WHISPERCPP_RESAMPLE_ROLLOFF = 0.945
+ WHISPERCPP_RESAMPLE_LENGTH_MODE = "round"
+ EXECUTABLE_ENV = "SPEECHSCOPE_WHISPERCPP_BIN"
+ MODEL_ENV = "SPEECHSCOPE_WHISPERCPP_MODEL"
+-_TIMESTAMP_RE = re.compile(r"^(\d+):(\d+):(\d+)[,.](\d+)$")
+ _VERSION_RE = re.compile(r"whisper\.cpp version:\s*(.+)", re.IGNORECASE)
+
+
+@@ -37,8 +33,8 @@ def info() -> BackendInfo:
+     return BackendInfo(
+         name=BACKEND_NAME,
+         version=None,
+-        supports_word_timestamps=True,
+-        supports_segment_timestamps=True,
++        supports_word_timestamps=False,
++        supports_segment_timestamps=False,
+         supports_language_hint=True,
+         supported_devices=("cpu", "auto"),
+     )
+@@ -101,62 +97,20 @@ def _model_path(model: str | None, *, cache_dir=None) -> str:
+             f"Provide a local whisper.cpp model with --model or set {MODEL_ENV}"
+         )
+     if selected.startswith("whispercpp:"):
+-        from ..models import ModelStore
++        from ..models import ModelManager
+
+-        return str(ModelStore(cache_dir).path(selected))
++        return str(ModelManager(cache_dir=cache_dir, packaged_catalog=True).path(selected))
+     path = Path(selected).expanduser()
+     if not path.is_file():
+         raise BackendUnavailableError(f"whisper.cpp model file does not exist: {path}")
++    try:
++        with path.open("rb") as model_file:
++            model_file.read(1)
++    except OSError as exc:
++        raise BackendUnavailableError(f"whisper.cpp model file is not readable: {path}") from exc
+     return str(path.resolve())
+
+
+-def _number(value: object) -> float | None:
+-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+-        return None
+-    result = float(value)
+-    return result if math.isfinite(result) else None
+-
+-
+-def _timestamp(value: object) -> float | None:
+-    if isinstance(value, str):
+-        text = value.strip()
+-        match = _TIMESTAMP_RE.fullmatch(text)
+-        if match:
+-            hours, minutes, seconds, fraction = match.groups()
+-            return (
+-                int(hours) * 3600
+-                + int(minutes) * 60
+-                + int(seconds)
+-                + int(fraction) / (10 ** len(fraction))
+-            )
+-        try:
+-            result = float(text)
+-        except ValueError:
+-            return None
+-        return result if math.isfinite(result) else None
+-    return _number(value)
+-
+-
+-def _segment_times(segment: Mapping[str, object]) -> tuple[float | None, float | None]:
+-    offsets = segment.get("offsets")
+-    if isinstance(offsets, Mapping):
+-        start_ms = _number(offsets.get("from"))
+-        end_ms = _number(offsets.get("to"))
+-        if start_ms is not None and end_ms is not None:
+-            return start_ms / 1000.0, end_ms / 1000.0
+-
+-    timestamps = segment.get("timestamps")
+-    if isinstance(timestamps, Mapping):
+-        start = _timestamp(timestamps.get("from"))
+-        end = _timestamp(timestamps.get("to"))
+-        if start is not None and end is not None:
+-            return start, end
+-
+-    start = _timestamp(segment.get("start"))
+-    end = _timestamp(segment.get("end"))
+-    return start, end
+-
+-
+ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> TranscriptionResult:
+     try:
+         data = json.loads(path.read_text(encoding="utf-8"))
+@@ -173,11 +127,7 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
+     raw_segments = data.get("transcription", [])
+     if not isinstance(raw_segments, list):
+         raise TranscriptionError("whisper-cli JSON transcription field must be an array")
+-
+     text_parts: list[str] = []
+-    words: list[TimedWord] = []
+-    native_word_segments = True
+-    all_segments_timed = True
+     for segment in raw_segments:
+         if not isinstance(segment, Mapping):
+             raise TranscriptionError("whisper-cli JSON transcription entries must be objects")
+@@ -185,16 +135,6 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
+         if not isinstance(segment_text, str):
+             raise TranscriptionError("whisper-cli JSON transcription text must be a string")
+         text_parts.append(segment_text)
+-        lexical_words = normalize(segment_text, "basic-v1").split()
+-        if not lexical_words:
+-            continue
+-        start, end = _segment_times(segment)
+-        if start is None or end is None:
+-            all_segments_timed = False
+-            continue
+-        words.append(TimedWord(segment_text.strip(), start, end))
+-        if len(lexical_words) != 1:
+-            native_word_segments = False
+
+     raw_text = result.get("text", data.get("text"))
+     if raw_text is None:
+@@ -202,24 +142,19 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
+     if not isinstance(raw_text, str):
+         raise TranscriptionError("whisper-cli JSON result text must be a string")
+     language = result.get("language")
++    if language is None:
++        language = data.get("language")
+     if language is not None and not isinstance(language, str):
+         raise TranscriptionError("whisper-cli JSON language must be a string or null")
+
+-    timing_source: Literal["native_word", "derived_segment", "unavailable"]
+-    if not words:
+-        timing_source = "unavailable"
+-    elif native_word_segments and all_segments_timed:
+-        timing_source = "native_word"
+-    else:
+-        timing_source = "derived_segment"
+     return TranscriptionResult(
+         text=raw_text,
+-        words=tuple(words),
++        words=(),
+         language=language,
+         backend=BACKEND_NAME,
+         model=model,
+         duration_s=audio.duration_s,
+-        timing_source=timing_source,
++        timing_source="unavailable",
+         device=device,
+     )
+
+diff --git a/speechscope/cli.py b/speechscope/cli.py
+index 558a3db..d4a17f2 100644
+--- a/speechscope/cli.py
++++ b/speechscope/cli.py
+@@ -20,6 +20,8 @@ from .errors import (
+     InvalidReferenceError,
+     InvalidThresholdPolicyError,
+     ModelError,
++    ModelIntegrityError,
++    ModelNotInstalledError,
+     TranscriptionError,
+     UnsupportedBackendOptionError,
+ )
+@@ -73,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
+     inspect.add_argument("--format", choices=("human", "json"), default="human")
+     doctor = commands.add_parser("doctor")
+     doctor.add_argument("--backend", default="redux")
++
++    doctor.add_argument("--model")
++    doctor.add_argument("--device", default="cpu")
++    doctor.add_argument("--cache-dir", type=Path)
++    doctor.add_argument("--format", choices=("json", "human"), default="human")
+     metrics = commands.add_parser("metrics")
+     metrics.add_argument("action", choices=("list",))
+     metrics.add_argument("--format", choices=("json", "human"), default="human")
+@@ -182,9 +189,10 @@ def _run_models(args) -> int:
+                 )
+         return 0
+     if action == "path":
+-        path = manager.path(args.ref, backend=args.backend)
++        model = manager.show(args.ref, backend=args.backend)
++        path = manager.path(model["ref"], backend=args.backend)
+         if args.format == "json":
+-            _emit({"ref": args.ref, "path": str(path)}, "json")
++            _emit({"ref": model["ref"], "path": str(path)}, "json")
+         else:
+             print(path)
+         return 0
+@@ -206,6 +214,126 @@ def _run_models(args) -> int:
+     raise AssertionError(f"Unknown models action: {action}")
+
+
++def _doctor_whispercpp(args, info) -> int:
++    from .backends.whispercpp import probe_executable
++    from .models import ModelManager
++
++    device_supported = args.device in info.supported_devices
++    checks: dict[str, bool | None] = {
++        "device_supported": device_supported,
++        "runtime_available": False,
++        "catalog_model": None,
++        "managed": None,
++        "installed": None,
++        "verified": None,
++        "readable": None,
++    }
++    runtime: dict[str, str | bool | None] = {
++        "executable": "whisper-cli",
++        "available": False,
++        "path": None,
++        "version": None,
++    }
++    model_store: dict[str, bool | str | None] = {
++        "installed": None,
++        "verified": None,
++        "readable": None,
++        "path": None,
++    }
++    errors: list[str] = []
++
++    if not device_supported:
++        supported = ", ".join(info.supported_devices)
++        errors.append(f"whispercpp does not support device {args.device!r}; supported: {supported}")
++    try:
++        executable, version = probe_executable()
++        runtime.update(available=True, path=executable, version=version)
++        checks["runtime_available"] = True
++    except BackendUnavailableError as exc:
++        errors.append(str(exc))
++
++    selected_model = None
++    if args.model:
++        checks.update(
++            catalog_model=False,
++            managed=False,
++            installed=False,
++            verified=False,
++            readable=False,
++        )
++        model_store.update(installed=False, verified=False, readable=False)
++        manager = ModelManager(cache_dir=args.cache_dir, packaged_catalog=True)
++        try:
++            selected_model = manager.show(args.model, backend="whispercpp")
++            checks["catalog_model"] = True
++            managed = selected_model["acquisition"]["mode"] == "managed"
++            checks["managed"] = managed
++            if not managed:
++                errors.append(f"{selected_model['ref']} is not SpeechScope-managed")
++            else:
++                try:
++                    model_path = manager.path(selected_model["ref"], backend="whispercpp")
++                except ModelIntegrityError as exc:
++                    checks.update(installed=True, verified=False, readable=False)
++                    model_store.update(installed=True, verified=False, readable=False)
++                    errors.append(str(exc))
++                except ModelNotInstalledError as exc:
++                    errors.append(str(exc))
++                except ModelError as exc:
++                    errors.append(str(exc))
++                else:
++                    checks.update(installed=True, verified=True, readable=True)
++                    model_store.update(
++                        installed=True,
++                        verified=True,
++                        readable=True,
++                        path=str(model_path),
++                    )
++        except ModelError as exc:
++            errors.append(str(exc))
++        if selected_model is not None:
++            model_store["managed"] = checks["managed"]
++
++    required = [checks["device_supported"], checks["runtime_available"]]
++    if args.model:
++        required.extend(
++            checks[name]
++            for name in ("catalog_model", "managed", "installed", "verified", "readable")
++        )
++    report = {
++        "ok": all(required),
++        "backend": "whispercpp",
++        "device": args.device,
++        "model": selected_model["ref"] if selected_model is not None else args.model,
++        "runtime": runtime,
++        "model_store": model_store,
++        "checks": checks,
++        "errors": errors,
++    }
++    if args.format == "json":
++        _emit(report, "json")
++    else:
++        status = "ready" if report["ok"] else "not ready"
++        print(f"Backend whispercpp: {status} (device={args.device})")
++        if runtime["available"]:
++            version_note = (
++                f" (whisper.cpp {runtime['version']})"
++                if runtime["version"]
++                else " (version unavailable)"
++            )
++            print(f"whisper-cli available{version_note} at {runtime['path']}")
++        if args.model:
++            print(f"Model: {report['model']}")
++            if model_store["verified"]:
++                print(f"Managed model verified at {model_store['path']}")
++            print("Model artifacts are checked locally; no download or inference is performed.")
++        else:
++            print("Model weights are not accessed.")
++        for error in errors:
++            print(f"speechscope: {error}", file=sys.stderr)
++    return 0 if report["ok"] else 3
++
++
+ def main(argv: list[str] | None = None) -> int:
+     args = _parser().parse_args(argv)
+     try:
+@@ -226,6 +354,9 @@ def main(argv: list[str] | None = None) -> int:
+             return 0
+         if args.command == "doctor":
+             info = backend_info(args.backend)
++
++            if info.name == "whispercpp":
++                return _doctor_whispercpp(args, info)
+             if info.name == "redux":
+                 if info.version is None:
+                     raise BackendUnavailableError(
+@@ -243,19 +374,6 @@ def main(argv: list[str] | None = None) -> int:
+                     "metadata-only preflight, not model/device readiness. "
+                     "Photon is not initialized and model weights are not accessed."
+                 )
+-            elif info.name == "whispercpp":
+-                from .backends.whispercpp import probe_executable
+-
+-                executable, whisper_version = probe_executable()
+-                version_note = (
+-                    f" (whisper.cpp {whisper_version})"
+-                    if whisper_version
+-                    else " (version unavailable)"
+-                )
+-                print(
+-                    f"Backend whispercpp: executable available{version_note} at {executable}; "
+-                    "metadata-only preflight. Model weights are not accessed."
+-                )
+             else:
+                 print(
+                     f"Backend {info.name}: dependency metadata preflight passed; "
+diff --git a/speechscope/data/model-catalog-v1.json b/speechscope/data/model-catalog-v1.json
+new file mode 100644
+index 0000000..ab28732
+--- /dev/null
++++ b/speechscope/data/model-catalog-v1.json
+@@ -0,0 +1,317 @@
++{
++  "kind": "speechscope-model-catalog",
++  "models": {
++    "redux:parakeet-redux": {
++      "acquisition": {
++        "mode": "runtime-managed",
++        "reason": "Photon is the supported runtime; SpeechScope does not own or remove Photon cache entries.",
++        "runtime_locator": "moondream/parakeet-redux"
++      },
++      "aliases": ["redux", "moondream/parakeet-redux"],
++      "artifacts": [
++        {
++          "filename": "config.json",
++          "path": "config.json",
++          "primary": false,
++          "role": "config",
++          "sha256": null,
++          "size": null,
++          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/config.json?download=true"
++        },
++        {
++          "filename": "model.safetensors",
++          "path": "model.safetensors",
++          "primary": true,
++          "role": "weights",
++          "sha256": "78ec25733ee0d0c1586d1346fc86db9d0c2e436e3a8ab1d32a82d1bb8f848d21",
++          "size": 177774490,
++          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/model.safetensors?download=true"
++        },
++        {
++          "filename": "ternary.json",
++          "path": "ternary.json",
++          "primary": false,
++          "role": "packing",
++          "sha256": null,
++          "size": null,
++          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/ternary.json?download=true"
++        },
++        {
++          "filename": "tokenizer.json",
++          "path": "tokenizer.json",
++          "primary": false,
++          "role": "tokenizer",
++          "sha256": null,
++          "size": null,
++          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/tokenizer.json?download=true"
++        }
++      ],
++      "backend": "redux",
++      "description": "Moondream Parakeet Redux bundle used by the Photon runtime",
++      "format": "photon-parakeet-redux",
++      "id": "parakeet-redux",
++      "kind": "bundle",
++      "languages": [
++        "en",
++        "de",
++        "fr",
++        "es",
++        "it",
++        "pt",
++        "ru",
++        "uk",
++        "hr",
++        "sl",
++        "lv",
++        "lt",
++        "et",
++        "fi",
++        "sv",
++        "da",
++        "nl",
++        "pl",
++        "cs",
++        "sk",
++        "hu",
++        "ro",
++        "bg",
++        "el",
++        "mt"
++      ],
++      "ref": "redux:parakeet-redux",
++      "runtime": {
++        "minimum_version": "2.4.1",
++        "model_argument": "moondream/parakeet-redux",
++        "package": "moondream",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "cc-by-4.0",
++        "provider": "huggingface",
++        "repository": "moondream/parakeet-redux",
++        "revision": "2bf128600aac4b16946f7ed8372e56117fe5e23b"
++      }
++    },
++    "whispercpp:base-q5_1": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["base", "base-multilingual"],
++      "artifacts": [
++        {
++          "filename": "ggml-base-q5_1.bin",
++          "path": "ggml-base-q5_1.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
++          "size": 59707625,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp base-q5_1 GGML model",
++      "format": "ggml",
++      "id": "base-q5_1",
++      "kind": "model",
++      "languages": ["*"],
++      "ref": "whispercpp:base-q5_1",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_1",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    },
++    "whispercpp:base.en-q5_1": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["base.en", "base-en"],
++      "artifacts": [
++        {
++          "filename": "ggml-base.en-q5_1.bin",
++          "path": "ggml-base.en-q5_1.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
++          "size": 59721011,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en-q5_1.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp base.en-q5_1 GGML model",
++      "format": "ggml",
++      "id": "base.en-q5_1",
++      "kind": "model",
++      "languages": ["en"],
++      "ref": "whispercpp:base.en-q5_1",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_1",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    },
++    "whispercpp:large-v3-turbo-q5_0": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["turbo", "large-v3-turbo"],
++      "artifacts": [
++        {
++          "filename": "ggml-large-v3-turbo-q5_0.bin",
++          "path": "ggml-large-v3-turbo-q5_0.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
++          "size": 574041195,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp large-v3-turbo-q5_0 GGML model",
++      "format": "ggml",
++      "id": "large-v3-turbo-q5_0",
++      "kind": "model",
++      "languages": ["*"],
++      "ref": "whispercpp:large-v3-turbo-q5_0",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_0",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    },
++    "whispercpp:small-q5_1": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["small", "small-multilingual"],
++      "artifacts": [
++        {
++          "filename": "ggml-small-q5_1.bin",
++          "path": "ggml-small-q5_1.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
++          "size": 190085487,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small-q5_1.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp small-q5_1 GGML model",
++      "format": "ggml",
++      "id": "small-q5_1",
++      "kind": "model",
++      "languages": ["*"],
++      "ref": "whispercpp:small-q5_1",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_1",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    },
++    "whispercpp:tiny-q5_1": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["tiny", "tiny-multilingual"],
++      "artifacts": [
++        {
++          "filename": "ggml-tiny-q5_1.bin",
++          "path": "ggml-tiny-q5_1.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
++          "size": 32152673,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny-q5_1.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp tiny-q5_1 GGML model",
++      "format": "ggml",
++      "id": "tiny-q5_1",
++      "kind": "model",
++      "languages": ["*"],
++      "ref": "whispercpp:tiny-q5_1",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_1",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    },
++    "whispercpp:tiny.en-q5_1": {
++      "acquisition": {
++        "mode": "managed"
++      },
++      "aliases": ["tiny.en", "tiny-en"],
++      "artifacts": [
++        {
++          "filename": "ggml-tiny.en-q5_1.bin",
++          "path": "ggml-tiny.en-q5_1.bin",
++          "primary": true,
++          "role": "model",
++          "sha256": "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b",
++          "size": 32166155,
++          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en-q5_1.bin?download=true"
++        }
++      ],
++      "backend": "whispercpp",
++      "description": "whisper.cpp tiny.en-q5_1 GGML model",
++      "format": "ggml",
++      "id": "tiny.en-q5_1",
++      "kind": "model",
++      "languages": ["en"],
++      "ref": "whispercpp:tiny.en-q5_1",
++      "runtime": {
++        "executable": "whisper-cli",
++        "model_argument": "primary_artifact",
++        "quantization": "q5_1",
++        "sample_rate_hz": 16000
++      },
++      "source": {
++        "license": "mit",
++        "provider": "huggingface",
++        "repository": "ggerganov/whisper.cpp",
++        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
++      }
++    }
++  },
++  "schema": 1,
++  "source": {
++    "model_count": 7,
++    "provider": "huggingface"
++  }
++}
+diff --git a/speechscope/models.py b/speechscope/models.py
+index a50ae58..d7be620 100644
+--- a/speechscope/models.py
++++ b/speechscope/models.py
+@@ -14,6 +14,7 @@ import re
+ import shutil
+ import tempfile
+ from datetime import UTC, datetime
++from importlib import resources
+ from pathlib import Path
+ from typing import Any
+ from urllib.error import HTTPError, URLError
+@@ -35,7 +36,8 @@ DEFAULT_CATALOG_URL = (
+     "main/catalog/models.json"
+ )
+ CATALOG_ENV = "SPEECHSCOPE_MODEL_CATALOG"
+-MANIFEST_NAME = ".speechscope-model.json"
++MODEL_HOME_ENV = "SPEECHSCOPE_MODEL_HOME"
++MANIFEST_NAME = "install.json"
+ _MANIFEST_SCHEMA = 1
+ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+@@ -47,6 +49,12 @@ def default_cache_dir() -> Path:
+     return Path(user_cache_dir("speechscope"))
+
+
++def default_model_home() -> Path:
++    """Resolve the environment-configured model home or platform cache default."""
++    configured = os.environ.get(MODEL_HOME_ENV)
++    return Path(configured).expanduser() if configured else default_cache_dir()
++
++
+ def _safe_component(value: str, what: str) -> str:
+     if not isinstance(value, str) or not _COMPONENT_RE.fullmatch(value) or value in {".", ".."}:
+         raise ModelCatalogError(f"Unsafe {what}: {value!r}")
+@@ -107,10 +115,14 @@ def _validate_catalog(data: object) -> dict[str, Any]:
+         if ref != f"{backend}:{model_id}" or model.get("ref") != ref:
+             raise ModelCatalogError(f"Catalog key/ref/backend/id mismatch for {ref!r}")
+         model_source = model.get("source")
+-        if not isinstance(model_source, dict) or not _REVISION_RE.fullmatch(
+-            str(model_source.get("revision", ""))
++        if (
++            not isinstance(model_source, dict)
++            or not isinstance(model_source.get("revision"), str)
++            or not _REVISION_RE.fullmatch(model_source["revision"])
++            or not isinstance(model_source.get("repository"), str)
++            or not model_source["repository"]
+         ):
+-            raise ModelCatalogError(f"Catalog model {ref!r} must pin a 40-character revision")
++            raise ModelCatalogError(f"Catalog model {ref!r} must pin a source repository revision")
+         acquisition = model.get("acquisition")
+         mode = acquisition.get("mode") if isinstance(acquisition, dict) else None
+         if mode not in {"managed", "runtime-managed"}:
+@@ -119,20 +131,34 @@ def _validate_catalog(data: object) -> dict[str, Any]:
+         if not isinstance(artifacts, list) or not artifacts:
+             raise ModelCatalogError(f"Catalog model {ref!r} has no artifacts")
+         primary_count = 0
++        artifact_paths: set[str] = set()
+         for artifact in artifacts:
+             if not isinstance(artifact, dict):
+                 raise ModelCatalogError(f"Catalog model {ref!r} has an invalid artifact")
+-            _safe_artifact_path(artifact.get("path"))
+-            if artifact.get("primary") is True:
++            artifact_path = _safe_artifact_path(artifact.get("path")).as_posix()
++            if artifact_path in artifact_paths:
++                raise ModelCatalogError(
++                    f"Catalog model {ref!r} repeats artifact path {artifact_path!r}"
++                )
++            artifact_paths.add(artifact_path)
++            if not isinstance(artifact.get("primary"), bool):
++                raise ModelCatalogError(
++                    f"Catalog artifact for {ref!r} must declare primary as boolean"
++                )
++            if artifact["primary"]:
+                 primary_count += 1
+-            parsed = urlparse(str(artifact.get("url", "")))
+-            if parsed.scheme != "https" or parsed.hostname != "huggingface.co":
++            artifact_url = artifact.get("url")
++            if not isinstance(artifact_url, str):
++                raise ModelCatalogError(f"Catalog artifact for {ref!r} needs a URL")
++            parsed = urlparse(artifact_url)
++            if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
+                 raise ModelCatalogError(f"Catalog artifact for {ref!r} must use Hugging Face HTTPS")
+             if f"/resolve/{model_source['revision']}/" not in parsed.path:
+                 raise ModelCatalogError(
+                     f"Catalog artifact for {ref!r} is not pinned to its source revision"
+                 )
+             size = artifact.get("size")
++
+             digest = artifact.get("sha256")
+             if mode == "managed":
+                 if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+@@ -171,11 +197,18 @@ class ModelCatalogClient:
+         offline: bool = False,
+         refresh: bool = False,
+         timeout: float = 30,
++        packaged: bool = False,
+     ):
+-        selected = str(catalog) if catalog is not None else os.environ.get(CATALOG_ENV)
+-        self.catalog = selected or DEFAULT_CATALOG_URL
++        selected = (
++            None
++            if packaged
++            else str(catalog)
++            if catalog is not None
++            else os.environ.get(CATALOG_ENV)
++        )
++        self.catalog = selected
+         self.cache_dir = (
+-            Path(cache_dir).expanduser() if cache_dir is not None else default_cache_dir()
++            Path(cache_dir).expanduser() if cache_dir is not None else default_model_home()
+         )
+         self.offline = offline
+         self.refresh = refresh
+@@ -184,6 +217,8 @@ class ModelCatalogClient:
+
+     @property
+     def is_local(self) -> bool:
++        if self.catalog is None:
++            return True
+         parsed = urlparse(self.catalog)
+         return (
+             not parsed.scheme
+@@ -196,6 +231,19 @@ class ModelCatalogClient:
+             raise ModelCatalogError("--offline and --refresh cannot be used together")
+         if self._data is not None:
+             return self._data
++        if self.catalog is None:
++            try:
++                payload = (
++                    resources.files("speechscope")
++                    .joinpath("data/model-catalog-v1.json")
++                    .read_text(encoding="utf-8")
++                )
++                self._data = _validate_catalog(json.loads(payload))
++            except ModelCatalogError:
++                raise
++            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
++                raise ModelCatalogError(f"Could not read packaged model catalog: {exc}") from exc
++            return self._data
+         if self.is_local:
+             path = Path(self.catalog.removeprefix("file://")).expanduser()
+             self._data = self._read_catalog(path)
+@@ -221,13 +269,22 @@ class ModelCatalogClient:
+                 self._data = self._read_catalog(cache_file)
+                 return self._data
+             except ModelCatalogError:
+-                # A corrupt cache is replaced only after a successful remote fetch.
++                # Replace a corrupt cache only after a successful remote fetch.
+                 pass
+         try:
+             request = Request(self.catalog, headers={"User-Agent": "SpeechScope model catalog"})
+             with urlopen(request, timeout=self.timeout) as response:
++                if (
++                    urlparse(
++                        response.geturl() if hasattr(response, "geturl") else self.catalog
++                    ).scheme
++                    != "https"
++                ):
++                    raise ModelCatalogError("Catalog fetch redirected away from HTTPS")
+                 payload = response.read()
+             data = _validate_catalog(json.loads(payload.decode("utf-8")))
++        except ModelCatalogError:
++            raise
+         except (
+             HTTPError,
+             URLError,
+@@ -290,8 +347,8 @@ class ModelStore:
+     """Install and manage model files below a SpeechScope-owned cache root."""
+
+     def __init__(self, cache_dir: str | Path | None = None, *, timeout: float = 60):
+-        self.root = Path(cache_dir).expanduser() if cache_dir is not None else default_cache_dir()
+-        self.models_dir = self.root / "models"
++        self.root = Path(cache_dir).expanduser() if cache_dir is not None else default_model_home()
++        self.models_dir = self.root
+         self.timeout = timeout
+
+     def install(self, model: dict[str, Any], *, force: bool = False) -> Path:
+@@ -327,13 +384,21 @@ class ModelStore:
+                 f"Refusing to replace a symbolic-link model directory: {destination}"
+             )
+         if destination.exists() and not force:
+-            raise ModelIntegrityError(
+-                f"Model {model['ref']} is already installed; pass --force to replace it"
+-            )
++            try:
++                return self.path(model)
++            except (ModelIntegrityError, ModelNotInstalledError) as exc:
++                raise ModelIntegrityError(
++                    f"Existing installation of {model['ref']} is invalid; "
++                    "pass --force to replace it"
++                ) from exc
++        if destination.exists():
++            # Never let --force delete a directory that lacks a valid ownership manifest.
++            self._read_manifest(destination, expected_ref=model["ref"])
+
+         stage = Path(tempfile.mkdtemp(prefix=f".{model_id}.stage-", dir=destination_parent))
++        backup: Path | None = None
+         try:
+-            installed_artifacts = []
++            installed_artifacts: list[dict[str, Any]] = []
+             for artifact in model["artifacts"]:
+                 relative = _safe_artifact_path(artifact["path"])
+                 target = stage / relative
+@@ -347,24 +412,43 @@ class ModelStore:
+                         "primary": artifact.get("primary") is True,
+                     }
+                 )
++            from . import __version__
++
+             manifest = {
+                 "schema": _MANIFEST_SCHEMA,
++                "catalog_kind": "speechscope-model-catalog",
++                "catalog_schema": 1,
+                 "ref": model["ref"],
+                 "backend": backend,
+                 "id": model_id,
+                 "source": model["source"],
++                "source_repository": model["source"]["repository"],
++                "source_revision": model["source"]["revision"],
+                 "installed_at": datetime.now(UTC).isoformat(),
++                "speechscope_version": __version__,
+                 "artifacts": installed_artifacts,
+             }
+             (stage / MANIFEST_NAME).write_text(
+                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+             )
+             if destination.exists():
+-                self._read_manifest(destination, expected_ref=model["ref"])
+-                shutil.rmtree(destination)
+-            stage.replace(destination)
++                backup = Path(
++                    tempfile.mkdtemp(prefix=f".{model_id}.backup-", dir=destination_parent)
++                )
++                backup.rmdir()
++                destination.replace(backup)
++            try:
++                stage.replace(destination)
++            except Exception:
++                if backup is not None and backup.exists() and not destination.exists():
++                    backup.replace(destination)
++                raise
++            if backup is not None:
++                shutil.rmtree(backup, ignore_errors=True)
+         except Exception:
+             shutil.rmtree(stage, ignore_errors=True)
++            if backup is not None and backup.exists() and not destination.exists():
++                backup.replace(destination)
+             raise
+         return self.path(model)
+
+@@ -388,11 +472,15 @@ class ModelStore:
+             request = Request(
+                 str(artifact["url"]), headers={"User-Agent": "SpeechScope model manager"}
+             )
+-            with urlopen(request, timeout=self.timeout) as response, target.open("wb") as output:
+-                while chunk := response.read(1024 * 1024):
+-                    output.write(chunk)
+-                    digest.update(chunk)
+-                    size += len(chunk)
++            with urlopen(request, timeout=self.timeout) as response:
++                final_url = getattr(response, "geturl", lambda: artifact["url"])()
++                if urlparse(final_url).scheme != "https":
++                    raise ModelIntegrityError(f"Artifact for {ref} redirected away from HTTPS")
++                with target.open("wb") as output:
++                    while chunk := response.read(1024 * 1024):
++                        output.write(chunk)
++                        digest.update(chunk)
++                        size += len(chunk)
+         except (HTTPError, URLError, OSError, TimeoutError) as exc:
+             target.unlink(missing_ok=True)
+             raise ModelIntegrityError(f"Could not download artifact for {ref}: {exc}") from exc
+@@ -423,7 +511,9 @@ class ModelStore:
+             or directory.is_symlink()
+             or not directory.is_dir()
+         ):
+-            raise ModelNotInstalledError(f"No SpeechScope-managed model directory at {directory}")
++            raise ModelNotInstalledError(
++                f"No SpeechScope-managed model directory or manifest at {directory}"
++            )
+         if manifest_path.is_symlink():
+             raise ModelNotInstalledError(
+                 f"SpeechScope model manifest must not be a symbolic link: {manifest_path}"
+@@ -438,6 +528,13 @@ class ModelStore:
+             not isinstance(manifest, dict)
+             or isinstance(manifest.get("schema"), bool)
+             or manifest.get("schema") != _MANIFEST_SCHEMA
++            or manifest.get("catalog_kind") != "speechscope-model-catalog"
++            or isinstance(manifest.get("catalog_schema"), bool)
++            or manifest.get("catalog_schema") != 1
++            or not isinstance(manifest.get("source_repository"), str)
++            or not isinstance(manifest.get("source_revision"), str)
++            or not isinstance(manifest.get("installed_at"), str)
++            or not isinstance(manifest.get("speechscope_version"), str)
+         ):
+             raise ModelNotInstalledError(f"No valid SpeechScope model manifest in {directory}")
+         ref = manifest.get("ref")
+@@ -453,8 +550,13 @@ class ModelStore:
+             raise ModelNotInstalledError(f"SpeechScope model manifest does not own {directory}")
+         backend, model_id = ref.split(":", 1)
+         source = manifest.get("source")
+-        if not isinstance(source, dict) or not _REVISION_RE.fullmatch(
+-            str(source.get("revision", ""))
++        if (
++            not isinstance(source, dict)
++            or not isinstance(source.get("revision"), str)
++            or not _REVISION_RE.fullmatch(source["revision"])
++            or not isinstance(source.get("repository"), str)
++            or manifest["source_repository"] != source["repository"]
++            or manifest["source_revision"] != source["revision"]
+         ):
+             raise ModelNotInstalledError(f"SpeechScope model manifest in {directory} is invalid")
+         if manifest.get("backend") != backend or manifest.get("id") != model_id:
+@@ -495,6 +597,37 @@ class ModelStore:
+             raise ModelNotInstalledError(f"SpeechScope model manifest in {directory} is invalid")
+         return manifest
+
++    @staticmethod
++    def _verify_catalog_metadata(manifest: dict[str, Any], model: dict[str, Any]) -> None:
++        ModelStore._require_managed(model)
++        expected_artifacts = [
++            {
++                "path": _safe_artifact_path(item["path"]).as_posix(),
++                "size": item["size"],
++                "sha256": item["sha256"],
++                "primary": item.get("primary") is True,
++            }
++            for item in model["artifacts"]
++        ]
++        actual_artifacts = [
++            {
++                "path": item["path"],
++                "size": item["size"],
++                "sha256": item["sha256"],
++                "primary": item["primary"],
++            }
++            for item in manifest["artifacts"]
++        ]
++        if (
++            manifest.get("catalog_kind") != "speechscope-model-catalog"
++            or manifest.get("catalog_schema") != 1
++            or manifest.get("source") != model["source"]
++            or actual_artifacts != expected_artifacts
++        ):
++            raise ModelIntegrityError(
++                f"Installed model {model['ref']} manifest does not match the current catalog"
++            )
++
+     def installed(self) -> builtins.list[dict[str, Any]]:
+         result: builtins.list[dict[str, Any]] = []
+         if not self.models_dir.is_dir():
+@@ -511,6 +644,7 @@ class ModelStore:
+         if isinstance(model, dict):
+             self._require_managed(model)
+         ref = model if isinstance(model, str) else model["ref"]
++        self.verify(model)
+         directory = self._install_dir(ref)
+         manifest = self._read_manifest(directory, expected_ref=ref)
+         primary = next((a for a in manifest["artifacts"] if a.get("primary") is True), None)
+@@ -519,6 +653,13 @@ class ModelStore:
+         path = _artifact_file(directory, primary["path"])
+         if not path.is_file():
+             raise ModelNotInstalledError(f"Primary artifact for {ref} is missing: {path}")
++        try:
++            with path.open("rb") as stream:
++                stream.read(1)
++        except OSError as exc:
++            raise ModelIntegrityError(
++                f"Primary artifact for {ref} is not readable: {path}"
++            ) from exc
+         return path
+
+     def verify(self, model: dict[str, Any] | str) -> dict[str, Any]:
+@@ -527,6 +668,9 @@ class ModelStore:
+         ref = model if isinstance(model, str) else model["ref"]
+         directory = self._install_dir(ref)
+         manifest = self._read_manifest(directory, expected_ref=ref)
++
++        if isinstance(model, dict):
++            self._verify_catalog_metadata(manifest, model)
+         results = []
+         for artifact in manifest["artifacts"]:
+             path = _artifact_file(directory, artifact["path"])
+@@ -567,9 +711,14 @@ class ModelManager:
+         cache_dir: str | Path | None = None,
+         offline: bool = False,
+         refresh: bool = False,
++        packaged_catalog: bool = False,
+     ):
+         self.catalog = ModelCatalogClient(
+-            catalog, cache_dir=cache_dir, offline=offline, refresh=refresh
++            catalog,
++            cache_dir=cache_dir,
++            offline=offline,
++            refresh=refresh,
++            packaged=packaged_catalog,
+         )
+         self.store = ModelStore(cache_dir)
+
+@@ -586,12 +735,9 @@ class ModelManager:
+         return self.store.installed()
+
+     def _installed_selector(self, ref: str, backend: str | None):
+-        if ":" in ref:
+-            selected_backend = ref.split(":", 1)[0]
+-            if backend is not None and selected_backend != backend:
+-                raise ModelNotFoundError(f"Model {ref!r} is not in backend {backend!r}")
+-            return ref
+-        return self.show(ref, backend=backend)
++        model = self.show(ref, backend=backend)
++        ModelStore._require_managed(model)
++        return model
+
+     def path(self, ref: str, *, backend: str | None = None) -> Path:
+         return self.store.path(self._installed_selector(ref, backend))
+diff --git a/tests/test_models.py b/tests/test_models.py
+index 627a0bf..2551a73 100644
+--- a/tests/test_models.py
++++ b/tests/test_models.py
+@@ -14,7 +14,7 @@ from speechscope.errors import (
+     ModelNotInstalledError,
+     ModelNotManagedError,
+ )
+-from speechscope.models import ModelCatalogClient, ModelManager, ModelStore
++from speechscope.models import MODEL_HOME_ENV, ModelCatalogClient, ModelManager, ModelStore
+
+ REVISION = "a" * 40
+ CONTENT = b"tiny model artifact"
+@@ -187,7 +187,7 @@ def test_runtime_managed_models_are_not_installed_or_removed(tmp_path):
+
+
+ def test_remove_refuses_unowned_directory(tmp_path):
+-    directory = tmp_path / "models" / "whispercpp" / "tiny-test"
++    directory = tmp_path / "whispercpp" / "tiny-test"
+     directory.mkdir(parents=True)
+     sentinel = directory / "user-file"
+     sentinel.write_text("keep", encoding="utf-8")
+@@ -210,7 +210,7 @@ def test_catalog_rejects_unsafe_artifact_paths(tmp_path, bad_path):
+ def test_force_replacement_is_staged_and_requires_owned_existing_install(tmp_path):
+     model = managed_model()
+     store = ModelStore(tmp_path)
+-    destination = tmp_path / "models" / "whispercpp" / "tiny-test"
++    destination = tmp_path / "whispercpp" / "tiny-test"
+     destination.mkdir(parents=True)
+     sentinel = destination / "user-file"
+     sentinel.write_text("not managed", encoding="utf-8")
+@@ -221,3 +221,110 @@ def test_force_replacement_is_staged_and_requires_owned_existing_install(tmp_pat
+     ):
+         store.install(model, force=True)
+     assert sentinel.exists()
++
++
++def test_packaged_catalog_contains_pinned_tiny_english_model_without_network():
++    with patch(
++        "speechscope.models.urlopen", side_effect=AssertionError("default catalog must be local")
++    ):
++        model = ModelCatalogClient().resolve("whispercpp:tiny.en-q5_1")
++
++    assert model["ref"] == "whispercpp:tiny.en-q5_1"
++    assert model["backend"] == "whispercpp"
++    assert model["source"]["revision"] == "5359861c739e955e79d9a303bcbc70fb988958b1"
++    artifact = model["artifacts"][0]
++    assert artifact["path"] == "ggml-tiny.en-q5_1.bin"
++    assert artifact["size"] == 32_166_155
++    assert artifact["sha256"] == "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"
++    assert "/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/" in artifact["url"]
++
++
++def test_model_home_explicit_override_precedes_environment(tmp_path, monkeypatch):
++    environment_home = tmp_path / "environment-home"
++    explicit_home = tmp_path / "explicit-home"
++    monkeypatch.setenv(MODEL_HOME_ENV, str(environment_home))
++
++    assert ModelStore().root == environment_home
++    assert ModelStore(explicit_home).root == explicit_home
++
++
++def test_valid_install_is_idempotent_and_writes_required_manifest(tmp_path):
++    model = managed_model()
++    store = ModelStore(tmp_path)
++    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)) as fetch:
++        installed = store.install(model)
++        assert store.install(model) == installed
++
++    assert fetch.call_count == 1
++    manifest = json.loads((installed.parent / "install.json").read_text(encoding="utf-8"))
++    assert manifest["ref"] == model["ref"]
++    assert manifest["catalog_schema"] == 1
++    assert manifest["source_repository"] == "test/model"
++    assert manifest["source_revision"] == REVISION
++    assert manifest["installed_at"]
++    assert manifest["speechscope_version"]
++    assert manifest["artifacts"] == [
++        {
++            "path": "tiny-test.bin",
++            "size": len(CONTENT),
++            "sha256": hashlib.sha256(CONTENT).hexdigest(),
++            "primary": True,
++        }
++    ]
++
++
++def test_corrupt_install_requires_force_and_force_activates_verified_replacement(tmp_path):
++    model = managed_model()
++    store = ModelStore(tmp_path)
++    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)):
++        artifact = store.install(model)
++    artifact.write_bytes(b"corrupted")
++
++    with pytest.raises(ModelIntegrityError, match="pass --force"):
++        store.install(model)
++
++    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)) as fetch:
++        replacement = store.install(model, force=True)
++    assert fetch.call_count == 1
++    assert replacement.read_bytes() == CONTENT
++    assert store.verify(model)["verified"] is True
++
++
++@pytest.mark.parametrize(
++    ("mutation", "message"),
++    [
++        (lambda model: model["artifacts"][0].update(url="http://huggingface.co/file"), "HTTPS"),
++        (
++            lambda model: model["artifacts"][0].update(
++                url=f"https://huggingface.co/test/model/resolve/{'c' * 40}/tiny-test.bin"
++            ),
++            "pinned to its source revision",
++        ),
++    ],
++)
++def test_install_rejects_insecure_or_unpinned_urls_before_download(tmp_path, mutation, message):
++    model = managed_model()
++    mutation(model)
++    with (
++        patch("speechscope.models.urlopen", side_effect=AssertionError("must not download")),
++        pytest.raises(ModelCatalogError, match=message),
++    ):
++        ModelStore(tmp_path).install(model)
++
++
++def test_install_rejects_exact_size_and_digest_mismatches_and_cleans_staging(tmp_path):
++    for field, value, message in (
++        ("size", len(CONTENT) + 1, "Integrity check failed"),
++        ("sha256", "0" * 64, "Integrity check failed"),
++    ):
++        model = managed_model(model_id=f"tiny-{field}")
++        model["artifacts"][0][field] = value
++        store = ModelStore(tmp_path / field)
++        with (
++            patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)),
++            pytest.raises(ModelIntegrityError, match=message),
++        ):
++            store.install(model)
++        backend_dir = store.models_dir / "whispercpp"
++        assert not (backend_dir / model["id"]).exists()
++        assert not list(backend_dir.glob("*.stage-*"))
+diff --git a/tests/test_packaging.py b/tests/test_packaging.py
+index 78a1cf0..93af4a9 100644
+--- a/tests/test_packaging.py
++++ b/tests/test_packaging.py
+@@ -55,6 +55,9 @@ def test_built_wheel_and_sdist_include_public_contracts(tmp_path):
+         assert "speechscope/backend_audio.py" in members
+         assert "speechscope/backends/whispercpp.py" in members
+         assert "speechscope/models.py" in members
++
++        assert "speechscope/data/model-catalog-v1.json" in members
++        assert not any(name.endswith(".bin") for name in members)
+         assert any(name.endswith(".dist-info/licenses/LICENSE") for name in members)
+         metadata_path = next(name for name in members if name.endswith(".dist-info/METADATA"))
+         version, description, license_expression = _metadata_version(wheel.read(metadata_path))
+@@ -69,11 +72,14 @@ def test_built_wheel_and_sdist_include_public_contracts(tmp_path):
+
+     with tarfile.open(sdists[0], "r:gz") as sdist:
+         members = sdist.getnames()
++
++        assert not any(name.endswith(".bin") for name in members)
+         assert any(name.endswith("/LICENSE") for name in members)
+         assert any(name.endswith("/README.md") for name in members)
+         assert any(name.endswith("/docs/model-management.md") for name in members)
+         assert any(name.endswith("/speechscope/py.typed") for name in members)
+         assert any(name.endswith("/speechscope/schemas/report-v1.schema.json") for name in members)
++        assert any(name.endswith("/speechscope/data/model-catalog-v1.json") for name in members)
+         pkg_info = next(name for name in members if name.endswith("/PKG-INFO"))
+         version_sdist, _, _ = _metadata_version(sdist.extractfile(pkg_info).read())
+
+diff --git a/tests/test_whispercpp.py b/tests/test_whispercpp.py
+index f39a79a..ab7a485 100644
+--- a/tests/test_whispercpp.py
++++ b/tests/test_whispercpp.py
+@@ -4,6 +4,7 @@ import json
+ import os
+ import sys
+ from pathlib import Path
++from unittest.mock import patch
+
+ import numpy as np
+ import pytest
+@@ -22,6 +23,7 @@ from speechscope.backends.whispercpp import (
+ from speechscope.cli import main
+ from speechscope.errors import (
+     BackendUnavailableError,
++    ModelIntegrityError,
+     TranscriptionError,
+     UnsupportedBackendOptionError,
+ )
+@@ -132,8 +134,8 @@ def test_fake_cli_receives_canonical_wav_and_result_has_backend_provenance(tmp_p
+     assert result.model == str(model.resolve())
+     assert result.text == "Hallo, café 世界!"
+     assert result.language == "de"
+-    assert result.timing_source == "native_word"
+-    assert [word.start_s for word in result.words] == [0.1, 0.4, 0.7]
++    assert result.timing_source == "unavailable"
++    assert result.words == ()
+     assert result.backend_audio_input is not None
+     assert result.backend_audio_input.kind == "generated_wav_path"
+     assert result.backend_audio_input.selection == "canonicalized_wav"
+@@ -204,9 +206,8 @@ def test_segment_timing_is_not_promoted_to_word_timing(tmp_path, monkeypatch):
+     _, model, _ = fake_cli(tmp_path, monkeypatch, mode="segment")
+     source = source_wav(tmp_path, rate=16_000, frames=1600, channels=1)
+     result, _ = run_backend(source, model=str(model))
+-    assert result.timing_source == "derived_segment"
+-    assert len(result.words) == 1
+-    assert result.words[0].text == "hello world"
++    assert result.timing_source == "unavailable"
++    assert result.words == ()
+
+
+ def test_pcm16_clipping_diagnostic_is_reported(tmp_path, monkeypatch):
+@@ -237,6 +238,9 @@ def test_metadata_discovery_does_not_execute_cli(tmp_path, monkeypatch):
+     monkeypatch.setenv("FAKE_ARGS_FILE", str(tmp_path / "should-not-exist.json"))
+     assert info().name == "whispercpp"
+     assert info().version is None
++
++    assert info().supports_word_timestamps is False
++    assert info().supports_segment_timestamps is False
+     assert not (tmp_path / "should-not-exist.json").exists()
+
+
+@@ -340,6 +344,136 @@ def test_whispercpp_doctor_fails_when_executable_is_missing(tmp_path, monkeypatc
+     assert "not found or is not runnable" in capsys.readouterr().err
+
+
++def test_whispercpp_doctor_json_ready_uses_canonical_ref_and_never_infers(
++    tmp_path, monkeypatch, capsys
++):
++    _, _, args_file = fake_cli(tmp_path, monkeypatch)
++    model_path = tmp_path / "managed-model.bin"
++    model_path.write_bytes(b"verified")
++    catalog_model = {
++        "ref": "whispercpp:tiny.en-q5_1",
++        "acquisition": {"mode": "managed"},
++    }
++
++    class ReadyManager:
++        def __init__(self, *, cache_dir, packaged_catalog):
++            assert cache_dir is None
++            assert packaged_catalog is True
++
++        def show(self, ref, *, backend):
++            assert ref == "tiny.en"
++            assert backend == "whispercpp"
++            return catalog_model
++
++        def path(self, ref, *, backend):
++            assert ref == catalog_model["ref"]
++            assert backend == "whispercpp"
++            return model_path
++
++    monkeypatch.setattr("speechscope.models.ModelManager", ReadyManager)
++    assert (
++        main(
++            [
++                "doctor",
++                "--backend",
++                "whispercpp",
++                "--model",
++                "tiny.en",
++                "--device",
++                "cpu",
++                "--format",
++                "json",
++            ]
++        )
++        == 0
++    )
++    report = json.loads(capsys.readouterr().out)
++    assert report["ok"] is True
++    assert report["model"] == "whispercpp:tiny.en-q5_1"
++    assert report["runtime"]["available"] is True
++    assert report["model_store"] == {
++        "installed": True,
++        "verified": True,
++        "readable": True,
++        "path": str(model_path),
++        "managed": True,
++    }
++    assert not args_file.exists()
++
++
++def test_whispercpp_doctor_json_uses_packaged_catalog_and_reports_missing_model(
++    tmp_path, monkeypatch, capsys
++):
++    fake_cli(tmp_path, monkeypatch)
++    monkeypatch.setenv("SPEECHSCOPE_MODEL_CATALOG", "https://catalog.invalid/models.json")
++    with patch(
++        "speechscope.models.urlopen",
++        side_effect=AssertionError("doctor must not fetch a catalog"),
++    ):
++        status = main(
++            [
++                "doctor",
++                "--backend",
++                "whispercpp",
++                "--model",
++                "whispercpp:tiny.en-q5_1",
++                "--device",
++                "cpu",
++                "--cache-dir",
++                str(tmp_path / "store"),
++                "--format",
++                "json",
++            ]
++        )
++    report = json.loads(capsys.readouterr().out)
++    assert status == 3
++    assert report["ok"] is False
++    assert report["model"] == "whispercpp:tiny.en-q5_1"
++    assert report["checks"]["runtime_available"] is True
++    assert report["checks"]["catalog_model"] is True
++    assert report["model_store"]["installed"] is False
++    assert report["model_store"]["verified"] is False
++
++
++def test_whispercpp_doctor_json_reports_corrupt_model_and_unsupported_device(
++    tmp_path, monkeypatch, capsys
++):
++    fake_cli(tmp_path, monkeypatch)
++    model = {"ref": "whispercpp:tiny.en-q5_1", "acquisition": {"mode": "managed"}}
++
++    class CorruptManager:
++        def __init__(self, *, cache_dir, packaged_catalog):
++            assert packaged_catalog is True
++
++        def show(self, ref, *, backend):
++            return model
++
++        def path(self, ref, *, backend):
++            raise ModelIntegrityError("Installed model failed integrity verification")
++
++    monkeypatch.setattr("speechscope.models.ModelManager", CorruptManager)
++    status = main(
++        [
++            "doctor",
++            "--backend",
++            "whispercpp",
++            "--model",
++            model["ref"],
++            "--device",
++            "cuda",
++            "--format",
++            "json",
++        ]
++    )
++    report = json.loads(capsys.readouterr().out)
++    assert status == 3
++    assert report["checks"]["device_supported"] is False
++    assert report["model_store"]["installed"] is True
++    assert report["model_store"]["verified"] is False
++    assert any("does not support device" in error for error in report["errors"])
++    assert any("integrity verification" in error for error in report["errors"])
++
++
+ @pytest.mark.integration
+ @pytest.mark.skipif(
+     os.environ.get("SPEECHSCOPE_RUN_WHISPERCPP_INTEGRATION") != "1",
+@@ -352,6 +486,8 @@ def test_real_whispercpp_cpu_integration():
+     reference = os.environ["SPEECHSCOPE_WHISPERCPP_REFERENCE"]
+     rights_evidence = os.environ["SPEECHSCOPE_WHISPERCPP_FIXTURE_LICENSE"]
+     model = os.environ[MODEL_ENV]
++
++    assert model.startswith("whispercpp:"), "Use a preinstalled managed model reference"
+     assert fixture.is_file(), "SPEECHSCOPE_WHISPERCPP_FIXTURE must name an authorized WAV"
+     assert reference.strip(), "Provide the fixture's reference transcript"
+     assert rights_evidence.strip(), "Record fixture rights evidence before running"
+@@ -367,6 +503,10 @@ def test_real_whispercpp_cpu_integration():
+     )
+     data = report.to_dict()
+     assert data["transcript"]["raw"].strip()
++
++    assert data["backend"]["name"] == "whispercpp"
++    assert data["backend"]["model"] == model
++    assert data["backend"]["device"] == "cpu"
+     assert data["provenance"]["backend_audio_input"]["sample_rate_hz"] == 16_000
+     assert data["provenance"]["backend_audio_input"]["sample_format"] == "PCM_16"
+     schema_path = Path(__file__).parents[1] / "speechscope" / "schemas" / "report-v1.schema.json"
+diff --git a/tests/test_whispercpp_models.py b/tests/test_whispercpp_models.py
+index a5459b2..5a460db 100644
+--- a/tests/test_whispercpp_models.py
++++ b/tests/test_whispercpp_models.py
+@@ -12,7 +12,7 @@ import soundfile as sf
+
+ from speechscope.backends.whispercpp import EXECUTABLE_ENV
+ from speechscope.cli import main
+-from speechscope.models import ModelStore
++from speechscope.models import CATALOG_ENV, ModelStore
+
+ REVISION = "b" * 40
+ WEIGHTS = b"verified model bytes"
+@@ -94,11 +94,19 @@ def test_managed_whispercpp_reference_transcribes_without_catalog_or_weight_netw
+     tmp_path, monkeypatch
+ ):
+     model = model_entry()
++
++    monkeypatch.setenv(CATALOG_ENV, "https://catalog.invalid/models.json")
+     cache = tmp_path / "cache"
+     with patch("speechscope.models.urlopen", return_value=BytesIO(WEIGHTS)):
+         installed_path = ModelStore(cache).install(model)
+     assert installed_path.read_bytes() == WEIGHTS
+
++    def local_store_path(manager, ref, *, backend=None):
++        assert manager.catalog.catalog is None
++        assert ref == model["ref"]
++        return ModelStore(cache).path(model)
++
++    monkeypatch.setattr("speechscope.models.ModelManager.path", local_store_path)
+     args_file = fake_whisper_cli(tmp_path, monkeypatch)
+     source = tmp_path / "speech.wav"
+     sf.write(
+@@ -126,6 +134,9 @@ def test_managed_whispercpp_reference_transcribes_without_catalog_or_weight_netw
+     assert report.transcription.model == model["ref"]
+     assert report.transcription.text == "hello"
+
++    assert report.transcription.words == ()
++    assert report.transcription.timing_source == "unavailable"
++
+
+ def test_models_list_and_show_support_local_catalog_json(tmp_path, capsys):
+     model = model_entry()
+@@ -157,11 +168,27 @@ def test_managed_models_cli_lifecycle(tmp_path, capsys):
+     inventory = json.loads(capsys.readouterr().out)
+     assert inventory[0]["ref"] == model["ref"]
+
+-    assert main(["models", "path", model["ref"], *common]) == 0
+-    model_path = json.loads(capsys.readouterr().out)["path"]
++    assert (
++        main(
++            [
++                "models",
++                "path",
++                model["id"],
++                "--backend",
++                "whispercpp",
++                "--catalog",
++                str(catalog),
++                *common,
++            ]
++        )
++        == 0
++    )
++    path_result = json.loads(capsys.readouterr().out)
++    assert path_result["ref"] == model["ref"]
++    model_path = path_result["path"]
+     assert Path(model_path).is_file()
+
+-    assert main(["models", "verify", model["ref"], *common]) == 0
++    assert main(["models", "verify", model["ref"], "--catalog", str(catalog), *common]) == 0
+     assert json.loads(capsys.readouterr().out)["verified"] is True
+
+     assert main(["models", "remove", model["ref"], "--catalog", str(catalog), *common]) == 0

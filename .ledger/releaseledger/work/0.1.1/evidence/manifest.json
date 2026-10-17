@@ -1,0 +1,91 @@
+{
+  "candidate_count": 3,
+  "candidates": [
+    {
+      "additions": 1192,
+      "deletions": 41,
+      "patch_file": "76ea52c.patch",
+      "patch_sha256": "aa904d83364b99024faf0be2b845aa4aff6a4e06c12fddf34b1a99fdbd7bc992",
+      "paths": [
+        "README.md",
+        "docs/backends.md",
+        "docs/whispercpp-integration.md",
+        "pyproject.toml",
+        "speechscope/__init__.py",
+        "speechscope/api.py",
+        "speechscope/backend_audio.py",
+        "speechscope/backends/redux.py",
+        "speechscope/backends/whispercpp.py",
+        "speechscope/cli.py",
+        "speechscope/contracts.py",
+        "speechscope/registry.py",
+        "speechscope/schemas/report-v1.schema.json",
+        "speechscope/types.py",
+        "tests/test_backend_audio.py",
+        "tests/test_packaging.py",
+        "tests/test_redux.py",
+        "tests/test_whispercpp.py"
+      ],
+      "sha": "76ea52c80929640e5b2b1384958230541514cad7",
+      "short_sha": "76ea52c",
+      "source_ref": "git:76ea52c80929640e5b2b1384958230541514cad7"
+    },
+    {
+      "additions": 1287,
+      "deletions": 11,
+      "patch_file": "377e657.patch",
+      "patch_sha256": "ca5807aa3aa8b78e2340cf74585a83f324c6b262c11dc6479897a2d4d5c7bd3b",
+      "paths": [
+        "MANIFEST.in",
+        "README.md",
+        "docs/backends.md",
+        "docs/model-management.md",
+        "pyproject.toml",
+        "speechscope/__init__.py",
+        "speechscope/backends/whispercpp.py",
+        "speechscope/cli.py",
+        "speechscope/errors.py",
+        "speechscope/models.py",
+        "speechscope/schemas/report-v1.schema.json",
+        "tests/test_models.py",
+        "tests/test_packaging.py",
+        "tests/test_whispercpp_models.py"
+      ],
+      "sha": "377e6579844852f8e612d111646514058fa2c526",
+      "short_sha": "377e657",
+      "source_ref": "git:377e6579844852f8e612d111646514058fa2c526"
+    },
+    {
+      "additions": 1037,
+      "deletions": 188,
+      "patch_file": "7879520.patch",
+      "patch_sha256": "b0d52a50ffae0fa273e6d9774c472d8cf7ca33af59f9d30a06fd156783c0ab50",
+      "paths": [
+        "README.md",
+        "docs/backends.md",
+        "docs/model-management.md",
+        "docs/whispercpp-integration.md",
+        "pyproject.toml",
+        "speechscope/backends/whispercpp.py",
+        "speechscope/cli.py",
+        "speechscope/data/model-catalog-v1.json",
+        "speechscope/models.py",
+        "tests/test_models.py",
+        "tests/test_packaging.py",
+        "tests/test_whispercpp.py",
+        "tests/test_whispercpp_models.py"
+      ],
+      "sha": "78795206a6e8e82f98b2b324c9d51faef32c46c7",
+      "short_sha": "7879520",
+      "source_ref": "git:78795206a6e8e82f98b2b324c9d51faef32c46c7"
+    }
+  ],
+  "git_base_ref": "69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3",
+  "git_base_sha": "69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3",
+  "git_head_ref": "78795206a6e8e82f98b2b324c9d51faef32c46c7",
+  "git_head_sha": "78795206a6e8e82f98b2b324c9d51faef32c46c7",
+  "include_merges": "nontrivial",
+  "object_type": "git_evidence_manifest",
+  "release_version": "0.1.1",
+  "schema_version": 1
+}

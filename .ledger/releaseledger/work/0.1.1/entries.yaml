@@ -1,0 +1,54 @@
+schema: releaseledger.entry-batch.v1
+operation: create
+schema_version: 1
+object_type: release_entry_batch
+release_version: 0.1.1
+git_base_ref: 69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3
+git_base_sha: 69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3
+git_head_ref: 78795206a6e8e82f98b2b324c9d51faef32c46c7
+git_head_sha: 78795206a6e8e82f98b2b324c9d51faef32c46c7
+include_merges: nontrivial
+entries:
+  - kind: added
+    summary: >-
+      Added a local whisper.cpp transcription backend with canonical audio conversion
+      and backend-input provenance reporting
+    status: accepted
+    source_refs:
+      - git:76ea52c80929640e5b2b1384958230541514cad7
+    paths:
+      - speechscope/backends/whispercpp.py
+      - speechscope/backend_audio.py
+      - docs/whispercpp-integration.md
+      - docs/backends.md
+      - tests/test_whispercpp.py
+      - tests/test_backend_audio.py
+    sources:
+      - git:76ea52c80929640e5b2b1384958230541514cad7
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"
+  - kind: added
+    summary: >-
+      Added catalog-backed model discovery and verified lifecycle management for
+      whisper.cpp model artifacts
+    status: accepted
+    source_refs:
+      - git:377e6579844852f8e612d111646514058fa2c526
+      - git:78795206a6e8e82f98b2b324c9d51faef32c46c7
+    paths:
+      - speechscope/models.py
+      - speechscope/cli.py
+      - speechscope/data/model-catalog-v1.json
+      - docs/model-management.md
+      - docs/whispercpp-integration.md
+      - tests/test_models.py
+      - tests/test_whispercpp_models.py
+    sources:
+      - git:377e6579844852f8e612d111646514058fa2c526
+      - git:78795206a6e8e82f98b2b324c9d51faef32c46c7
+    prs: []
+    issues: []
+    contributors:
+      - "@holgern"

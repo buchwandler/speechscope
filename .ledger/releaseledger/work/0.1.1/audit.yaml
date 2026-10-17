@@ -1,0 +1,103 @@
+schema_version: 1
+object_type: commit_audit_sheet
+versioning:
+  schema_version: 1
+  revision: 1
+release_version: 0.1.1
+git_base_ref: v0.1.0
+git_base_sha: 69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3
+git_head_ref: HEAD
+git_head_sha: 78795206a6e8e82f98b2b324c9d51faef32c46c7
+git_range: 69f9c92b75cdaa1c3c15919c9dec25d52a6b63f3..78795206a6e8e82f98b2b324c9d51faef32c46c7
+commit_count: 3
+rows:
+  - sha: 76ea52c80929640e5b2b1384958230541514cad7
+    source_ref: git:76ea52c80929640e5b2b1384958230541514cad7
+    short_sha: 76ea52c
+    changed_paths:
+      - README.md
+      - docs/backends.md
+      - docs/whispercpp-integration.md
+      - pyproject.toml
+      - speechscope/__init__.py
+      - speechscope/api.py
+      - speechscope/backend_audio.py
+      - speechscope/backends/redux.py
+      - speechscope/backends/whispercpp.py
+      - speechscope/cli.py
+      - speechscope/contracts.py
+      - speechscope/registry.py
+      - speechscope/schemas/report-v1.schema.json
+      - speechscope/types.py
+      - tests/test_backend_audio.py
+      - tests/test_packaging.py
+      - tests/test_redux.py
+      - tests/test_whispercpp.py
+    stats:
+      files_changed: 18
+      insertions: 1192
+      deletions: 41
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add support for whisper.cpp"
+  - sha: 377e6579844852f8e612d111646514058fa2c526
+    source_ref: git:377e6579844852f8e612d111646514058fa2c526
+    short_sha: 377e657
+    changed_paths:
+      - MANIFEST.in
+      - README.md
+      - docs/backends.md
+      - docs/model-management.md
+      - pyproject.toml
+      - speechscope/__init__.py
+      - speechscope/backends/whispercpp.py
+      - speechscope/cli.py
+      - speechscope/errors.py
+      - speechscope/models.py
+      - speechscope/schemas/report-v1.schema.json
+      - tests/test_models.py
+      - tests/test_packaging.py
+      - tests/test_whispercpp_models.py
+    stats:
+      files_changed: 14
+      insertions: 1287
+      deletions: 11
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: add model file management"
+  - sha: 78795206a6e8e82f98b2b324c9d51faef32c46c7
+    source_ref: git:78795206a6e8e82f98b2b324c9d51faef32c46c7
+    short_sha: "7879520"
+    changed_paths:
+      - README.md
+      - docs/backends.md
+      - docs/model-management.md
+      - docs/whispercpp-integration.md
+      - pyproject.toml
+      - speechscope/backends/whispercpp.py
+      - speechscope/cli.py
+      - speechscope/data/model-catalog-v1.json
+      - speechscope/models.py
+      - tests/test_models.py
+      - tests/test_packaging.py
+      - tests/test_whispercpp.py
+      - tests/test_whispercpp_models.py
+    stats:
+      files_changed: 13
+      insertions: 1037
+      deletions: 188
+    inspected: false
+    inspected_paths: []
+    observed_behavior: ""
+    public_impact: unknown
+    decision: needs_review
+    stale: false
+    evidence_subject: "feat: better whisper.cpp integration"
