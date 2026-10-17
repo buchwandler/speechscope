@@ -26,11 +26,13 @@ Python 3.11+ is supported. Redux continues to delegate model acquisition and cac
 speechscope backends list --format json
 speechscope doctor --backend redux
 speechscope doctor --backend whispercpp
+
+speechscope doctor --backend whispercpp --model whispercpp:tiny.en-q5_1 --device cpu --format json
 speechscope transcribe speech.wav --backend whispercpp --model /path/to/ggml-model.bin --device cpu --format json
 speechscope models list --backend whispercpp
-speechscope models install whispercpp:base.en-q5_1
-speechscope models verify whispercpp:base.en-q5_1
-speechscope transcribe speech.wav --backend whispercpp --model whispercpp:base.en-q5_1 --device cpu
+speechscope models install whispercpp:tiny.en-q5_1
+speechscope models verify whispercpp:tiny.en-q5_1
+speechscope transcribe speech.wav --backend whispercpp --model whispercpp:tiny.en-q5_1 --device cpu
 speechscope metrics list
 speechscope transcribe speech.wav --backend redux --format json --srt speech.srt
 speechscope analyze speech.wav --text-file expected.txt --format json --json report.json
@@ -41,7 +43,7 @@ speechscope analyze speech.wav --text-file expected.txt --thresholds examples/po
 
 ## Model catalog and management
 
-The metadata-only [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog) lists pinned whisper.cpp and Redux models. Model acquisition is explicit; transcription never downloads a catalog or model. See [model management](docs/model-management.md) for catalog caching, offline use, integrity checks, commands, and cache ownership. Redux remains runtime-managed by Photon; SpeechScope cannot inspect or remove its cache.
+SpeechScope packages an offline snapshot of the metadata-only [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog), which lists pinned whisper.cpp and Redux models. Catalogued whisper.cpp refs resolve only to already-installed, verified weights; inference never fetches catalog metadata or downloads/updates models. `SPEECHSCOPE_MODEL_HOME` selects the managed model root (explicit `--cache-dir`/API `cache_dir` overrides it). Catalog updates require a reviewed snapshot refresh; callers must pin the model used for their own content gate. See [model management](docs/model-management.md) for catalog refresh, secure installation, offline use, and cache ownership. Redux remains runtime-managed by Photon; SpeechScope cannot inspect or remove its cache.
 
 ## Strict and compound-aware comparison
 
@@ -81,6 +83,8 @@ Third-party providers can register a factory with `register_backend(name, factor
 Word alignment work is bounded by `(reference length + 1) * (hypothesis length + 1)` dynamic-programming cells. Strict alignment retains its backtrace up to 1,000,000 cells; compound alignment uses the same budget and permits at most three tokens on one side of a split/join match. CER uses a two-row algorithm up to 5,000,000 cells. Larger comparisons raise `AlignmentTooLargeError` before allocation.
 
 Word timestamps are **ASR estimates**, not ground-truth forced alignment. Only unambiguous one-to-one normalized ASR word/token correspondence permits timestamp projection. For example, a native `end-to-end` timestamp does not establish separate timestamps for normalized `end`, `to`, `end` tokens; those token timings remain unavailable. Invalid timing is diagnosed. `reference_timestamp_coverage_ratio` measures usable ASR timing, not textual correctness. Original audio time is preserved.
+
+The built-in whisper.cpp adapter currently returns recognized text and detected language without word or segment timing; its reports mark timing unavailable. Redux supports native word timestamps. Check backend metadata rather than assuming every backend provides timing.
 
 Reports use the packaged [report-v1 schema](docs/report-schema.md). Transcription-only mode has `reference=null`, `metrics=null`, and an empty alignment. `provenance.backend_audio_input` records which audio representation a backend received. CSV/SRT/VTT use recognized text, and individual file writes are atomic.
 

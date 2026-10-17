@@ -14,7 +14,7 @@ from speechscope.errors import (
     ModelNotInstalledError,
     ModelNotManagedError,
 )
-from speechscope.models import ModelCatalogClient, ModelManager, ModelStore
+from speechscope.models import MODEL_HOME_ENV, ModelCatalogClient, ModelManager, ModelStore
 
 REVISION = "a" * 40
 CONTENT = b"tiny model artifact"
@@ -187,7 +187,7 @@ def test_runtime_managed_models_are_not_installed_or_removed(tmp_path):
 
 
 def test_remove_refuses_unowned_directory(tmp_path):
-    directory = tmp_path / "models" / "whispercpp" / "tiny-test"
+    directory = tmp_path / "whispercpp" / "tiny-test"
     directory.mkdir(parents=True)
     sentinel = directory / "user-file"
     sentinel.write_text("keep", encoding="utf-8")
@@ -210,7 +210,7 @@ def test_catalog_rejects_unsafe_artifact_paths(tmp_path, bad_path):
 def test_force_replacement_is_staged_and_requires_owned_existing_install(tmp_path):
     model = managed_model()
     store = ModelStore(tmp_path)
-    destination = tmp_path / "models" / "whispercpp" / "tiny-test"
+    destination = tmp_path / "whispercpp" / "tiny-test"
     destination.mkdir(parents=True)
     sentinel = destination / "user-file"
     sentinel.write_text("not managed", encoding="utf-8")
@@ -221,3 +221,110 @@ def test_force_replacement_is_staged_and_requires_owned_existing_install(tmp_pat
     ):
         store.install(model, force=True)
     assert sentinel.exists()
+
+
+def test_packaged_catalog_contains_pinned_tiny_english_model_without_network():
+    with patch(
+        "speechscope.models.urlopen", side_effect=AssertionError("default catalog must be local")
+    ):
+        model = ModelCatalogClient().resolve("whispercpp:tiny.en-q5_1")
+
+    assert model["ref"] == "whispercpp:tiny.en-q5_1"
+    assert model["backend"] == "whispercpp"
+    assert model["source"]["revision"] == "5359861c739e955e79d9a303bcbc70fb988958b1"
+    artifact = model["artifacts"][0]
+    assert artifact["path"] == "ggml-tiny.en-q5_1.bin"
+    assert artifact["size"] == 32_166_155
+    assert artifact["sha256"] == "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"
+    assert "/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/" in artifact["url"]
+
+
+def test_model_home_explicit_override_precedes_environment(tmp_path, monkeypatch):
+    environment_home = tmp_path / "environment-home"
+    explicit_home = tmp_path / "explicit-home"
+    monkeypatch.setenv(MODEL_HOME_ENV, str(environment_home))
+
+    assert ModelStore().root == environment_home
+    assert ModelStore(explicit_home).root == explicit_home
+
+
+def test_valid_install_is_idempotent_and_writes_required_manifest(tmp_path):
+    model = managed_model()
+    store = ModelStore(tmp_path)
+    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)) as fetch:
+        installed = store.install(model)
+        assert store.install(model) == installed
+
+    assert fetch.call_count == 1
+    manifest = json.loads((installed.parent / "install.json").read_text(encoding="utf-8"))
+    assert manifest["ref"] == model["ref"]
+    assert manifest["catalog_schema"] == 1
+    assert manifest["source_repository"] == "test/model"
+    assert manifest["source_revision"] == REVISION
+    assert manifest["installed_at"]
+    assert manifest["speechscope_version"]
+    assert manifest["artifacts"] == [
+        {
+            "path": "tiny-test.bin",
+            "size": len(CONTENT),
+            "sha256": hashlib.sha256(CONTENT).hexdigest(),
+            "primary": True,
+        }
+    ]
+
+
+def test_corrupt_install_requires_force_and_force_activates_verified_replacement(tmp_path):
+    model = managed_model()
+    store = ModelStore(tmp_path)
+    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)):
+        artifact = store.install(model)
+    artifact.write_bytes(b"corrupted")
+
+    with pytest.raises(ModelIntegrityError, match="pass --force"):
+        store.install(model)
+
+    with patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)) as fetch:
+        replacement = store.install(model, force=True)
+    assert fetch.call_count == 1
+    assert replacement.read_bytes() == CONTENT
+    assert store.verify(model)["verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda model: model["artifacts"][0].update(url="http://huggingface.co/file"), "HTTPS"),
+        (
+            lambda model: model["artifacts"][0].update(
+                url=f"https://huggingface.co/test/model/resolve/{'c' * 40}/tiny-test.bin"
+            ),
+            "pinned to its source revision",
+        ),
+    ],
+)
+def test_install_rejects_insecure_or_unpinned_urls_before_download(tmp_path, mutation, message):
+    model = managed_model()
+    mutation(model)
+    with (
+        patch("speechscope.models.urlopen", side_effect=AssertionError("must not download")),
+        pytest.raises(ModelCatalogError, match=message),
+    ):
+        ModelStore(tmp_path).install(model)
+
+
+def test_install_rejects_exact_size_and_digest_mismatches_and_cleans_staging(tmp_path):
+    for field, value, message in (
+        ("size", len(CONTENT) + 1, "Integrity check failed"),
+        ("sha256", "0" * 64, "Integrity check failed"),
+    ):
+        model = managed_model(model_id=f"tiny-{field}")
+        model["artifacts"][0][field] = value
+        store = ModelStore(tmp_path / field)
+        with (
+            patch("speechscope.models.urlopen", return_value=BytesIO(CONTENT)),
+            pytest.raises(ModelIntegrityError, match=message),
+        ):
+            store.install(model)
+        backend_dir = store.models_dir / "whispercpp"
+        assert not (backend_dir / model["id"]).exists()
+        assert not list(backend_dir.glob("*.stage-*"))

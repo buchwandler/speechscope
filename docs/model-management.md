@@ -1,61 +1,100 @@
 # Model catalog and management
 
-SpeechScope uses a metadata-only catalog to describe compatible models. Model downloads are explicit: inference does not fetch or refresh catalog metadata and never downloads model weights.
+SpeechScope ships a packaged snapshot of the normalized [SpeechScope model catalog](https://github.com/buchwandler/speechscope-model-catalog). Catalog metadata pins upstream revisions, artifact URLs, sizes, and digests. Model acquisition is explicit: normal transcription and model-aware doctor checks use local catalog metadata and never download or refresh it.
 
 ## Ownership
 
-- `whispercpp` GGML artifacts are **managed** by SpeechScope. It downloads pinned artifacts, verifies size and SHA-256, writes an ownership manifest, and supports inventory, path lookup, verification, and removal.
-- `redux:parakeet-redux` is **runtime-managed** by Photon. SpeechScope can show its catalog metadata, but cannot install it, enumerate the Photon cache, resolve a SpeechScope-owned path, verify Photon files, or remove them. Redux inference continues to pass `moondream/parakeet-redux` to Photon.
-- User-supplied whisper.cpp model paths remain supported and are not imported into SpeechScope's managed store.
+- `whispercpp` GGML artifacts are **managed** by SpeechScope. An explicit `speechscope models install` downloads them, verifies exact size and SHA-256, and activates a manifest-owned installation.
+- `redux:parakeet-redux` is **runtime-managed** by Photon. SpeechScope can display its catalog metadata, but cannot install, enumerate, resolve, verify, or remove Photon-owned files.
+- A user-supplied whisper.cpp model path remains supported and is never copied into SpeechScope's managed store.
 
-The MVP catalog is [speechscope-model-catalog](https://github.com/buchwandler/speechscope-model-catalog). It pins upstream repository revisions, license identifiers, artifact URLs, sizes, and hashes. Catalog membership is not an assertion that SpeechScope owns the runtime's cache.
+## Model home
+
+The managed model root is selected in this order:
+
+1. An explicit `--cache-dir` CLI option or API `cache_dir` value.
+2. `SPEECHSCOPE_MODEL_HOME`.
+3. The platform cache directory selected by `platformdirs`.
+
+The configured directory is the model home itself. A managed install has a stable structure:
+
+```text
+<SPEECHSCOPE_MODEL_HOME>/
+  whispercpp/
+    tiny.en-q5_1/
+      install.json
+      ggml-tiny.en-q5_1.bin
+```
+
+`--cache-dir` and `cache_dir` remain supported as explicit model-home overrides. Explicit per-command catalog downloads are cached separately below `<model-home>/catalogs/`.
 
 ## Commands
 
 ```bash
 speechscope models list
 speechscope models list --backend whispercpp --format json
-speechscope models show whispercpp:base.en-q5_1
-speechscope models install whispercpp:base.en-q5_1
-speechscope models installed
-speechscope models path whispercpp:base.en-q5_1
-speechscope models verify whispercpp:base.en-q5_1
-speechscope models remove whispercpp:base.en-q5_1
+speechscope models show whispercpp:tiny.en-q5_1
+speechscope models install whispercpp:tiny.en-q5_1
+speechscope models verify whispercpp:tiny.en-q5_1
+speechscope models path whispercpp:tiny.en-q5_1
+speechscope models remove whispercpp:tiny.en-q5_1
 
-speechscope transcribe speech.wav \
+speechscope doctor \
   --backend whispercpp \
-  --model whispercpp:base.en-q5_1 \
-  --device cpu
+  --model whispercpp:tiny.en-q5_1 \
+  --device cpu \
+  --format json
 ```
 
-The canonical reference form is `<backend>:<id>`. Unambiguous catalog aliases (such as `base.en`) are accepted by catalog operations; use canonical refs to avoid ambiguity. Model-management errors are printed as user-facing errors rather than tracebacks.
+The canonical reference is `<backend>:<id>`. Unambiguous aliases may be used interactively; JSON output always reports the canonical ref. `models install --force` replaces an existing owned install only after downloading and verifying the replacement in staging. A valid existing install is idempotent and does not download the weights again.
 
-Catalog-reading commands (`list`, `show`, and `install`) accept `--catalog PATH_OR_HTTPS_URL`, `--cache-dir DIR`, `--offline`, and `--refresh`; `list`, `show`, and `install` also accept `--backend` and `--format human|json`. `install` accepts `--force` to replace an existing SpeechScope-managed installation after the replacement has been downloaded and verified. `installed`, `path`, `verify`, and `remove` also accept `--cache-dir` and `--format`; `path`, `verify`, and `remove` accept `--backend`. These commands operate only on SpeechScope manifests and never remove an arbitrary path.
+The catalog's `whispercpp:tiny.en-q5_1` model is the smallest English-specific quantized candidate in the supplied catalog (about 30.68 MiB). It is a lightweight smoke-test candidate, not an automatic default or a guarantee that it passes a downstream content gate. The caller selects and pins the model used for production validation. SpeechScope never silently upgrades or falls back to a larger model.
 
-For development and controlled deployments, `--catalog` can name a local JSON file. `SPEECHSCOPE_MODEL_CATALOG` provides the same default-source override for CLI and API calls. The built-in URL is:
+## Catalog snapshot and refresh
 
-```text
-https://raw.githubusercontent.com/buchwandler/speechscope-model-catalog/main/catalog/models.json
+The separate `speechscope-model-catalog` repository is the metadata source of truth. `speechscope/data/model-catalog-v1.json` is a generated, byte-for-byte snapshot of its normalized `catalog/models.json`; do not maintain a second independent catalog by hand. When adopting a catalog release, from the SpeechScope checkout refresh it from the sibling catalog checkout, for example:
+
+```bash
+cp ../speechscope-model-catalog/catalog/models.json speechscope/data/model-catalog-v1.json
+python -m json.tool speechscope/data/model-catalog-v1.json >/dev/null
+python -m pytest -q tests/test_models.py tests/test_packaging.py
 ```
 
-The default remote catalog is cached at `<cache-root>/catalogs/models.json`; overridden remote URLs use URL-specific hashed cache filenames. `--offline` uses that cached catalog and fails clearly if none exists; a local catalog path is read directly. `--refresh` explicitly fetches the remote catalog instead of using a cached copy and cannot be combined with `--offline`. The cache root defaults to the platform-specific SpeechScope user cache directory (`platformdirs`); `--cache-dir` or the API's `cache_dir` overrides it. Managed files are installed below `<cache-root>/models/<backend>/<id>/`.
+Review the catalog diff and package test results with the catalog release. The snapshot is included in both wheel and sdist; model weights are never package data.
 
-## Integrity and removal
+By default, `models list` and `models show` read the packaged snapshot without network access. Catalog-management commands accept `--catalog PATH_OR_HTTPS_URL`, `--offline`, and `--refresh`. `SPEECHSCOPE_MODEL_CATALOG` may override that source for catalog-management CLI/API calls; an explicit HTTPS source can be fetched when the caller runs a catalog operation. `--refresh` explicitly requests a fresh remote catalog and cannot be combined with `--offline`. Whisper.cpp inference and `doctor` always use the packaged catalog, even if that environment variable names a remote URL.
 
-Managed catalog artifacts must use HTTPS Hugging Face URLs pinned to the model's full upstream revision, safe relative paths, positive byte sizes, and SHA-256 digests. Installation streams each artifact into a staging directory and verifies exact size and hash before activating the install. Failed or mismatched downloads are removed without activating an installation.
+## Integrity, activation, and removal
 
-Each installation has a `.speechscope-model.json` manifest containing the canonical ref and verified artifact metadata. `models installed` enumerates only directories with a valid SpeechScope manifest. `models verify` recomputes every installed artifact's size and SHA-256. `models remove` deletes only the corresponding manifest-owned model directory; it will not follow symbolic links or recursively delete an arbitrary supplied path. Catalog integrity is relative to the catalog snapshot and does not authenticate a compromised catalog source.
+Managed catalog artifacts must have safe relative paths, HTTPS Hugging Face URLs pinned to the full source revision, positive byte sizes, and SHA-256 digests. Installation streams each artifact to a staging directory, checks its exact byte count and digest, and writes `install.json` with the canonical ref, catalog schema, source repository/revision, artifact paths/sizes/digests, install timestamp, and SpeechScope version. The final model directory is activated only after every artifact has passed verification; failed downloads clean their staging data.
+
+`models verify` re-hashes installed bytes instead of trusting the manifest. `models path` also verifies the installation before returning the readable primary artifact. An invalid existing installation fails by default; `--force` can replace it only when a valid ownership manifest identifies the existing directory. An unowned directory is never recursively deleted. `models remove` deletes only the manifest-owned model directory and refuses runtime-managed or arbitrary paths.
+
+Catalog integrity is relative to the selected catalog snapshot; it does not authenticate a compromised catalog source. Keep the catalog repository and its release review in the trust chain.
 
 ## Inference and local paths
 
-Installing a model is an explicit provisioning step. A server can install weights during image/build setup and then run offline:
+Install weights during an explicit provisioning step, then run offline:
 
 ```bash
-speechscope models install whispercpp:tiny-q5_1
-speechscope transcribe speech.wav --backend whispercpp --model whispercpp:tiny-q5_1
+export SPEECHSCOPE_MODEL_HOME="$PWD/.ci-cache/speechscope-models"
+speechscope models install whispercpp:tiny.en-q5_1
+speechscope transcribe speech.wav \
+  --backend whispercpp \
+  --model whispercpp:tiny.en-q5_1 \
+  --device cpu
 ```
 
-When the backend receives a `whispercpp:` ref, it resolves the already-installed primary artifact from local store state. It does not load, download, or refresh the catalog and does not download weights. With a ref, `--cache-dir` selects the SpeechScope cache root. With an explicit model file path, existing behavior remains: `--cache-dir` is unsupported.
+A canonical model ref resolves only to a catalogued, already-installed, verified managed model. Inference does not fetch the catalog or download weights. Use an explicit local file path as an escape hatch for models outside the packaged catalog:
+
+```bash
+speechscope transcribe speech.wav \
+  --backend whispercpp \
+  --model /absolute/path/to/ggml-model.bin \
+  --device cpu
+```
+
+`whisper-cli` is an external runtime and must be installed separately; see [whisper.cpp integration](whispercpp-integration.md). `doctor --backend whispercpp --model ... --format json` checks executable availability, device support, packaged catalog membership, managed installation integrity, and primary artifact readability. It does not download or run inference; when a model is selected, it reads the installed artifact to recompute its digest.
 
 Redux inference is unchanged and remains Photon-managed:
 
@@ -63,4 +102,4 @@ Redux inference is unchanged and remains Photon-managed:
 speechscope transcribe speech.wav --backend redux
 ```
 
-Do not infer Photon cache paths or treat `speechscope models installed` as a Photon inventory. Runtime cache status is intentionally not part of this MVP.
+Do not infer Photon cache paths or treat SpeechScope's installed-model inventory as a Photon inventory.

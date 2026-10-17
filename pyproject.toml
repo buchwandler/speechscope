@@ -45,7 +45,7 @@ where = ["."]
 include = ["speechscope*"]
 
 [tool.setuptools.package-data]
-speechscope = ["py.typed", "schemas/*.json"]
+speechscope = ["py.typed", "schemas/*.json", "data/*.json"]
 
 [tool.setuptools_scm]
 version_file = "speechscope/_version.py"

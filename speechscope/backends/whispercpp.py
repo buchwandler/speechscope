@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import shutil
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
 
 from ..backend_audio import materialize_pcm16_wav
 from ..errors import BackendUnavailableError, TranscriptionError, UnsupportedBackendOptionError
-from ..normalize import normalize
-from ..types import AudioInput, BackendAudioInput, BackendInfo, TimedWord, TranscriptionResult
+from ..types import AudioInput, BackendAudioInput, BackendInfo, TranscriptionResult
 
 BACKEND_NAME = "whispercpp"
 DEFAULT_EXECUTABLE = "whisper-cli"
@@ -28,7 +25,6 @@ WHISPERCPP_RESAMPLE_ROLLOFF = 0.945
 WHISPERCPP_RESAMPLE_LENGTH_MODE = "round"
 EXECUTABLE_ENV = "SPEECHSCOPE_WHISPERCPP_BIN"
 MODEL_ENV = "SPEECHSCOPE_WHISPERCPP_MODEL"
-_TIMESTAMP_RE = re.compile(r"^(\d+):(\d+):(\d+)[,.](\d+)$")
 _VERSION_RE = re.compile(r"whisper\.cpp version:\s*(.+)", re.IGNORECASE)
 
 
@@ -37,8 +33,8 @@ def info() -> BackendInfo:
     return BackendInfo(
         name=BACKEND_NAME,
         version=None,
-        supports_word_timestamps=True,
-        supports_segment_timestamps=True,
+        supports_word_timestamps=False,
+        supports_segment_timestamps=False,
         supports_language_hint=True,
         supported_devices=("cpu", "auto"),
     )
@@ -101,60 +97,18 @@ def _model_path(model: str | None, *, cache_dir=None) -> str:
             f"Provide a local whisper.cpp model with --model or set {MODEL_ENV}"
         )
     if selected.startswith("whispercpp:"):
-        from ..models import ModelStore
+        from ..models import ModelManager
 
-        return str(ModelStore(cache_dir).path(selected))
+        return str(ModelManager(cache_dir=cache_dir, packaged_catalog=True).path(selected))
     path = Path(selected).expanduser()
     if not path.is_file():
         raise BackendUnavailableError(f"whisper.cpp model file does not exist: {path}")
+    try:
+        with path.open("rb") as model_file:
+            model_file.read(1)
+    except OSError as exc:
+        raise BackendUnavailableError(f"whisper.cpp model file is not readable: {path}") from exc
     return str(path.resolve())
-
-
-def _number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    result = float(value)
-    return result if math.isfinite(result) else None
-
-
-def _timestamp(value: object) -> float | None:
-    if isinstance(value, str):
-        text = value.strip()
-        match = _TIMESTAMP_RE.fullmatch(text)
-        if match:
-            hours, minutes, seconds, fraction = match.groups()
-            return (
-                int(hours) * 3600
-                + int(minutes) * 60
-                + int(seconds)
-                + int(fraction) / (10 ** len(fraction))
-            )
-        try:
-            result = float(text)
-        except ValueError:
-            return None
-        return result if math.isfinite(result) else None
-    return _number(value)
-
-
-def _segment_times(segment: Mapping[str, object]) -> tuple[float | None, float | None]:
-    offsets = segment.get("offsets")
-    if isinstance(offsets, Mapping):
-        start_ms = _number(offsets.get("from"))
-        end_ms = _number(offsets.get("to"))
-        if start_ms is not None and end_ms is not None:
-            return start_ms / 1000.0, end_ms / 1000.0
-
-    timestamps = segment.get("timestamps")
-    if isinstance(timestamps, Mapping):
-        start = _timestamp(timestamps.get("from"))
-        end = _timestamp(timestamps.get("to"))
-        if start is not None and end is not None:
-            return start, end
-
-    start = _timestamp(segment.get("start"))
-    end = _timestamp(segment.get("end"))
-    return start, end
 
 
 def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> TranscriptionResult:
@@ -173,11 +127,7 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
     raw_segments = data.get("transcription", [])
     if not isinstance(raw_segments, list):
         raise TranscriptionError("whisper-cli JSON transcription field must be an array")
-
     text_parts: list[str] = []
-    words: list[TimedWord] = []
-    native_word_segments = True
-    all_segments_timed = True
     for segment in raw_segments:
         if not isinstance(segment, Mapping):
             raise TranscriptionError("whisper-cli JSON transcription entries must be objects")
@@ -185,16 +135,6 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
         if not isinstance(segment_text, str):
             raise TranscriptionError("whisper-cli JSON transcription text must be a string")
         text_parts.append(segment_text)
-        lexical_words = normalize(segment_text, "basic-v1").split()
-        if not lexical_words:
-            continue
-        start, end = _segment_times(segment)
-        if start is None or end is None:
-            all_segments_timed = False
-            continue
-        words.append(TimedWord(segment_text.strip(), start, end))
-        if len(lexical_words) != 1:
-            native_word_segments = False
 
     raw_text = result.get("text", data.get("text"))
     if raw_text is None:
@@ -202,24 +142,19 @@ def _parse_output(path: Path, audio: AudioInput, model: str, device: str) -> Tra
     if not isinstance(raw_text, str):
         raise TranscriptionError("whisper-cli JSON result text must be a string")
     language = result.get("language")
+    if language is None:
+        language = data.get("language")
     if language is not None and not isinstance(language, str):
         raise TranscriptionError("whisper-cli JSON language must be a string or null")
 
-    timing_source: Literal["native_word", "derived_segment", "unavailable"]
-    if not words:
-        timing_source = "unavailable"
-    elif native_word_segments and all_segments_timed:
-        timing_source = "native_word"
-    else:
-        timing_source = "derived_segment"
     return TranscriptionResult(
         text=raw_text,
-        words=tuple(words),
+        words=(),
         language=language,
         backend=BACKEND_NAME,
         model=model,
         duration_s=audio.duration_s,
-        timing_source=timing_source,
+        timing_source="unavailable",
         device=device,
     )
 

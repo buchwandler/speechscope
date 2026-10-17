@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -22,6 +23,7 @@ from speechscope.backends.whispercpp import (
 from speechscope.cli import main
 from speechscope.errors import (
     BackendUnavailableError,
+    ModelIntegrityError,
     TranscriptionError,
     UnsupportedBackendOptionError,
 )
@@ -132,8 +134,8 @@ def test_fake_cli_receives_canonical_wav_and_result_has_backend_provenance(tmp_p
     assert result.model == str(model.resolve())
     assert result.text == "Hallo, café 世界!"
     assert result.language == "de"
-    assert result.timing_source == "native_word"
-    assert [word.start_s for word in result.words] == [0.1, 0.4, 0.7]
+    assert result.timing_source == "unavailable"
+    assert result.words == ()
     assert result.backend_audio_input is not None
     assert result.backend_audio_input.kind == "generated_wav_path"
     assert result.backend_audio_input.selection == "canonicalized_wav"
@@ -204,9 +206,8 @@ def test_segment_timing_is_not_promoted_to_word_timing(tmp_path, monkeypatch):
     _, model, _ = fake_cli(tmp_path, monkeypatch, mode="segment")
     source = source_wav(tmp_path, rate=16_000, frames=1600, channels=1)
     result, _ = run_backend(source, model=str(model))
-    assert result.timing_source == "derived_segment"
-    assert len(result.words) == 1
-    assert result.words[0].text == "hello world"
+    assert result.timing_source == "unavailable"
+    assert result.words == ()
 
 
 def test_pcm16_clipping_diagnostic_is_reported(tmp_path, monkeypatch):
@@ -237,6 +238,9 @@ def test_metadata_discovery_does_not_execute_cli(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_ARGS_FILE", str(tmp_path / "should-not-exist.json"))
     assert info().name == "whispercpp"
     assert info().version is None
+
+    assert info().supports_word_timestamps is False
+    assert info().supports_segment_timestamps is False
     assert not (tmp_path / "should-not-exist.json").exists()
 
 
@@ -340,6 +344,136 @@ def test_whispercpp_doctor_fails_when_executable_is_missing(tmp_path, monkeypatc
     assert "not found or is not runnable" in capsys.readouterr().err
 
 
+def test_whispercpp_doctor_json_ready_uses_canonical_ref_and_never_infers(
+    tmp_path, monkeypatch, capsys
+):
+    _, _, args_file = fake_cli(tmp_path, monkeypatch)
+    model_path = tmp_path / "managed-model.bin"
+    model_path.write_bytes(b"verified")
+    catalog_model = {
+        "ref": "whispercpp:tiny.en-q5_1",
+        "acquisition": {"mode": "managed"},
+    }
+
+    class ReadyManager:
+        def __init__(self, *, cache_dir, packaged_catalog):
+            assert cache_dir is None
+            assert packaged_catalog is True
+
+        def show(self, ref, *, backend):
+            assert ref == "tiny.en"
+            assert backend == "whispercpp"
+            return catalog_model
+
+        def path(self, ref, *, backend):
+            assert ref == catalog_model["ref"]
+            assert backend == "whispercpp"
+            return model_path
+
+    monkeypatch.setattr("speechscope.models.ModelManager", ReadyManager)
+    assert (
+        main(
+            [
+                "doctor",
+                "--backend",
+                "whispercpp",
+                "--model",
+                "tiny.en",
+                "--device",
+                "cpu",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["model"] == "whispercpp:tiny.en-q5_1"
+    assert report["runtime"]["available"] is True
+    assert report["model_store"] == {
+        "installed": True,
+        "verified": True,
+        "readable": True,
+        "path": str(model_path),
+        "managed": True,
+    }
+    assert not args_file.exists()
+
+
+def test_whispercpp_doctor_json_uses_packaged_catalog_and_reports_missing_model(
+    tmp_path, monkeypatch, capsys
+):
+    fake_cli(tmp_path, monkeypatch)
+    monkeypatch.setenv("SPEECHSCOPE_MODEL_CATALOG", "https://catalog.invalid/models.json")
+    with patch(
+        "speechscope.models.urlopen",
+        side_effect=AssertionError("doctor must not fetch a catalog"),
+    ):
+        status = main(
+            [
+                "doctor",
+                "--backend",
+                "whispercpp",
+                "--model",
+                "whispercpp:tiny.en-q5_1",
+                "--device",
+                "cpu",
+                "--cache-dir",
+                str(tmp_path / "store"),
+                "--format",
+                "json",
+            ]
+        )
+    report = json.loads(capsys.readouterr().out)
+    assert status == 3
+    assert report["ok"] is False
+    assert report["model"] == "whispercpp:tiny.en-q5_1"
+    assert report["checks"]["runtime_available"] is True
+    assert report["checks"]["catalog_model"] is True
+    assert report["model_store"]["installed"] is False
+    assert report["model_store"]["verified"] is False
+
+
+def test_whispercpp_doctor_json_reports_corrupt_model_and_unsupported_device(
+    tmp_path, monkeypatch, capsys
+):
+    fake_cli(tmp_path, monkeypatch)
+    model = {"ref": "whispercpp:tiny.en-q5_1", "acquisition": {"mode": "managed"}}
+
+    class CorruptManager:
+        def __init__(self, *, cache_dir, packaged_catalog):
+            assert packaged_catalog is True
+
+        def show(self, ref, *, backend):
+            return model
+
+        def path(self, ref, *, backend):
+            raise ModelIntegrityError("Installed model failed integrity verification")
+
+    monkeypatch.setattr("speechscope.models.ModelManager", CorruptManager)
+    status = main(
+        [
+            "doctor",
+            "--backend",
+            "whispercpp",
+            "--model",
+            model["ref"],
+            "--device",
+            "cuda",
+            "--format",
+            "json",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert status == 3
+    assert report["checks"]["device_supported"] is False
+    assert report["model_store"]["installed"] is True
+    assert report["model_store"]["verified"] is False
+    assert any("does not support device" in error for error in report["errors"])
+    assert any("integrity verification" in error for error in report["errors"])
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     os.environ.get("SPEECHSCOPE_RUN_WHISPERCPP_INTEGRATION") != "1",
@@ -352,6 +486,8 @@ def test_real_whispercpp_cpu_integration():
     reference = os.environ["SPEECHSCOPE_WHISPERCPP_REFERENCE"]
     rights_evidence = os.environ["SPEECHSCOPE_WHISPERCPP_FIXTURE_LICENSE"]
     model = os.environ[MODEL_ENV]
+
+    assert model.startswith("whispercpp:"), "Use a preinstalled managed model reference"
     assert fixture.is_file(), "SPEECHSCOPE_WHISPERCPP_FIXTURE must name an authorized WAV"
     assert reference.strip(), "Provide the fixture's reference transcript"
     assert rights_evidence.strip(), "Record fixture rights evidence before running"
@@ -367,6 +503,10 @@ def test_real_whispercpp_cpu_integration():
     )
     data = report.to_dict()
     assert data["transcript"]["raw"].strip()
+
+    assert data["backend"]["name"] == "whispercpp"
+    assert data["backend"]["model"] == model
+    assert data["backend"]["device"] == "cpu"
     assert data["provenance"]["backend_audio_input"]["sample_rate_hz"] == 16_000
     assert data["provenance"]["backend_audio_input"]["sample_format"] == "PCM_16"
     schema_path = Path(__file__).parents[1] / "speechscope" / "schemas" / "report-v1.schema.json"

@@ -14,6 +14,7 @@ import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -35,7 +36,8 @@ DEFAULT_CATALOG_URL = (
     "main/catalog/models.json"
 )
 CATALOG_ENV = "SPEECHSCOPE_MODEL_CATALOG"
-MANIFEST_NAME = ".speechscope-model.json"
+MODEL_HOME_ENV = "SPEECHSCOPE_MODEL_HOME"
+MANIFEST_NAME = "install.json"
 _MANIFEST_SCHEMA = 1
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -45,6 +47,12 @@ _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 def default_cache_dir() -> Path:
     """Return the platform-specific SpeechScope cache root."""
     return Path(user_cache_dir("speechscope"))
+
+
+def default_model_home() -> Path:
+    """Resolve the environment-configured model home or platform cache default."""
+    configured = os.environ.get(MODEL_HOME_ENV)
+    return Path(configured).expanduser() if configured else default_cache_dir()
 
 
 def _safe_component(value: str, what: str) -> str:
@@ -107,10 +115,14 @@ def _validate_catalog(data: object) -> dict[str, Any]:
         if ref != f"{backend}:{model_id}" or model.get("ref") != ref:
             raise ModelCatalogError(f"Catalog key/ref/backend/id mismatch for {ref!r}")
         model_source = model.get("source")
-        if not isinstance(model_source, dict) or not _REVISION_RE.fullmatch(
-            str(model_source.get("revision", ""))
+        if (
+            not isinstance(model_source, dict)
+            or not isinstance(model_source.get("revision"), str)
+            or not _REVISION_RE.fullmatch(model_source["revision"])
+            or not isinstance(model_source.get("repository"), str)
+            or not model_source["repository"]
         ):
-            raise ModelCatalogError(f"Catalog model {ref!r} must pin a 40-character revision")
+            raise ModelCatalogError(f"Catalog model {ref!r} must pin a source repository revision")
         acquisition = model.get("acquisition")
         mode = acquisition.get("mode") if isinstance(acquisition, dict) else None
         if mode not in {"managed", "runtime-managed"}:
@@ -119,20 +131,34 @@ def _validate_catalog(data: object) -> dict[str, Any]:
         if not isinstance(artifacts, list) or not artifacts:
             raise ModelCatalogError(f"Catalog model {ref!r} has no artifacts")
         primary_count = 0
+        artifact_paths: set[str] = set()
         for artifact in artifacts:
             if not isinstance(artifact, dict):
                 raise ModelCatalogError(f"Catalog model {ref!r} has an invalid artifact")
-            _safe_artifact_path(artifact.get("path"))
-            if artifact.get("primary") is True:
+            artifact_path = _safe_artifact_path(artifact.get("path")).as_posix()
+            if artifact_path in artifact_paths:
+                raise ModelCatalogError(
+                    f"Catalog model {ref!r} repeats artifact path {artifact_path!r}"
+                )
+            artifact_paths.add(artifact_path)
+            if not isinstance(artifact.get("primary"), bool):
+                raise ModelCatalogError(
+                    f"Catalog artifact for {ref!r} must declare primary as boolean"
+                )
+            if artifact["primary"]:
                 primary_count += 1
-            parsed = urlparse(str(artifact.get("url", "")))
-            if parsed.scheme != "https" or parsed.hostname != "huggingface.co":
+            artifact_url = artifact.get("url")
+            if not isinstance(artifact_url, str):
+                raise ModelCatalogError(f"Catalog artifact for {ref!r} needs a URL")
+            parsed = urlparse(artifact_url)
+            if parsed.scheme != "https" or parsed.netloc != "huggingface.co":
                 raise ModelCatalogError(f"Catalog artifact for {ref!r} must use Hugging Face HTTPS")
             if f"/resolve/{model_source['revision']}/" not in parsed.path:
                 raise ModelCatalogError(
                     f"Catalog artifact for {ref!r} is not pinned to its source revision"
                 )
             size = artifact.get("size")
+
             digest = artifact.get("sha256")
             if mode == "managed":
                 if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
@@ -171,11 +197,18 @@ class ModelCatalogClient:
         offline: bool = False,
         refresh: bool = False,
         timeout: float = 30,
+        packaged: bool = False,
     ):
-        selected = str(catalog) if catalog is not None else os.environ.get(CATALOG_ENV)
-        self.catalog = selected or DEFAULT_CATALOG_URL
+        selected = (
+            None
+            if packaged
+            else str(catalog)
+            if catalog is not None
+            else os.environ.get(CATALOG_ENV)
+        )
+        self.catalog = selected
         self.cache_dir = (
-            Path(cache_dir).expanduser() if cache_dir is not None else default_cache_dir()
+            Path(cache_dir).expanduser() if cache_dir is not None else default_model_home()
         )
         self.offline = offline
         self.refresh = refresh
@@ -184,6 +217,8 @@ class ModelCatalogClient:
 
     @property
     def is_local(self) -> bool:
+        if self.catalog is None:
+            return True
         parsed = urlparse(self.catalog)
         return (
             not parsed.scheme
@@ -195,6 +230,19 @@ class ModelCatalogClient:
         if self.offline and self.refresh:
             raise ModelCatalogError("--offline and --refresh cannot be used together")
         if self._data is not None:
+            return self._data
+        if self.catalog is None:
+            try:
+                payload = (
+                    resources.files("speechscope")
+                    .joinpath("data/model-catalog-v1.json")
+                    .read_text(encoding="utf-8")
+                )
+                self._data = _validate_catalog(json.loads(payload))
+            except ModelCatalogError:
+                raise
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ModelCatalogError(f"Could not read packaged model catalog: {exc}") from exc
             return self._data
         if self.is_local:
             path = Path(self.catalog.removeprefix("file://")).expanduser()
@@ -221,13 +269,22 @@ class ModelCatalogClient:
                 self._data = self._read_catalog(cache_file)
                 return self._data
             except ModelCatalogError:
-                # A corrupt cache is replaced only after a successful remote fetch.
+                # Replace a corrupt cache only after a successful remote fetch.
                 pass
         try:
             request = Request(self.catalog, headers={"User-Agent": "SpeechScope model catalog"})
             with urlopen(request, timeout=self.timeout) as response:
+                if (
+                    urlparse(
+                        response.geturl() if hasattr(response, "geturl") else self.catalog
+                    ).scheme
+                    != "https"
+                ):
+                    raise ModelCatalogError("Catalog fetch redirected away from HTTPS")
                 payload = response.read()
             data = _validate_catalog(json.loads(payload.decode("utf-8")))
+        except ModelCatalogError:
+            raise
         except (
             HTTPError,
             URLError,
@@ -290,8 +347,8 @@ class ModelStore:
     """Install and manage model files below a SpeechScope-owned cache root."""
 
     def __init__(self, cache_dir: str | Path | None = None, *, timeout: float = 60):
-        self.root = Path(cache_dir).expanduser() if cache_dir is not None else default_cache_dir()
-        self.models_dir = self.root / "models"
+        self.root = Path(cache_dir).expanduser() if cache_dir is not None else default_model_home()
+        self.models_dir = self.root
         self.timeout = timeout
 
     def install(self, model: dict[str, Any], *, force: bool = False) -> Path:
@@ -327,13 +384,21 @@ class ModelStore:
                 f"Refusing to replace a symbolic-link model directory: {destination}"
             )
         if destination.exists() and not force:
-            raise ModelIntegrityError(
-                f"Model {model['ref']} is already installed; pass --force to replace it"
-            )
+            try:
+                return self.path(model)
+            except (ModelIntegrityError, ModelNotInstalledError) as exc:
+                raise ModelIntegrityError(
+                    f"Existing installation of {model['ref']} is invalid; "
+                    "pass --force to replace it"
+                ) from exc
+        if destination.exists():
+            # Never let --force delete a directory that lacks a valid ownership manifest.
+            self._read_manifest(destination, expected_ref=model["ref"])
 
         stage = Path(tempfile.mkdtemp(prefix=f".{model_id}.stage-", dir=destination_parent))
+        backup: Path | None = None
         try:
-            installed_artifacts = []
+            installed_artifacts: list[dict[str, Any]] = []
             for artifact in model["artifacts"]:
                 relative = _safe_artifact_path(artifact["path"])
                 target = stage / relative
@@ -347,24 +412,43 @@ class ModelStore:
                         "primary": artifact.get("primary") is True,
                     }
                 )
+            from . import __version__
+
             manifest = {
                 "schema": _MANIFEST_SCHEMA,
+                "catalog_kind": "speechscope-model-catalog",
+                "catalog_schema": 1,
                 "ref": model["ref"],
                 "backend": backend,
                 "id": model_id,
                 "source": model["source"],
+                "source_repository": model["source"]["repository"],
+                "source_revision": model["source"]["revision"],
                 "installed_at": datetime.now(UTC).isoformat(),
+                "speechscope_version": __version__,
                 "artifacts": installed_artifacts,
             }
             (stage / MANIFEST_NAME).write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
             if destination.exists():
-                self._read_manifest(destination, expected_ref=model["ref"])
-                shutil.rmtree(destination)
-            stage.replace(destination)
+                backup = Path(
+                    tempfile.mkdtemp(prefix=f".{model_id}.backup-", dir=destination_parent)
+                )
+                backup.rmdir()
+                destination.replace(backup)
+            try:
+                stage.replace(destination)
+            except Exception:
+                if backup is not None and backup.exists() and not destination.exists():
+                    backup.replace(destination)
+                raise
+            if backup is not None:
+                shutil.rmtree(backup, ignore_errors=True)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
+            if backup is not None and backup.exists() and not destination.exists():
+                backup.replace(destination)
             raise
         return self.path(model)
 
@@ -388,11 +472,15 @@ class ModelStore:
             request = Request(
                 str(artifact["url"]), headers={"User-Agent": "SpeechScope model manager"}
             )
-            with urlopen(request, timeout=self.timeout) as response, target.open("wb") as output:
-                while chunk := response.read(1024 * 1024):
-                    output.write(chunk)
-                    digest.update(chunk)
-                    size += len(chunk)
+            with urlopen(request, timeout=self.timeout) as response:
+                final_url = getattr(response, "geturl", lambda: artifact["url"])()
+                if urlparse(final_url).scheme != "https":
+                    raise ModelIntegrityError(f"Artifact for {ref} redirected away from HTTPS")
+                with target.open("wb") as output:
+                    while chunk := response.read(1024 * 1024):
+                        output.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
         except (HTTPError, URLError, OSError, TimeoutError) as exc:
             target.unlink(missing_ok=True)
             raise ModelIntegrityError(f"Could not download artifact for {ref}: {exc}") from exc
@@ -423,7 +511,9 @@ class ModelStore:
             or directory.is_symlink()
             or not directory.is_dir()
         ):
-            raise ModelNotInstalledError(f"No SpeechScope-managed model directory at {directory}")
+            raise ModelNotInstalledError(
+                f"No SpeechScope-managed model directory or manifest at {directory}"
+            )
         if manifest_path.is_symlink():
             raise ModelNotInstalledError(
                 f"SpeechScope model manifest must not be a symbolic link: {manifest_path}"
@@ -438,6 +528,13 @@ class ModelStore:
             not isinstance(manifest, dict)
             or isinstance(manifest.get("schema"), bool)
             or manifest.get("schema") != _MANIFEST_SCHEMA
+            or manifest.get("catalog_kind") != "speechscope-model-catalog"
+            or isinstance(manifest.get("catalog_schema"), bool)
+            or manifest.get("catalog_schema") != 1
+            or not isinstance(manifest.get("source_repository"), str)
+            or not isinstance(manifest.get("source_revision"), str)
+            or not isinstance(manifest.get("installed_at"), str)
+            or not isinstance(manifest.get("speechscope_version"), str)
         ):
             raise ModelNotInstalledError(f"No valid SpeechScope model manifest in {directory}")
         ref = manifest.get("ref")
@@ -453,8 +550,13 @@ class ModelStore:
             raise ModelNotInstalledError(f"SpeechScope model manifest does not own {directory}")
         backend, model_id = ref.split(":", 1)
         source = manifest.get("source")
-        if not isinstance(source, dict) or not _REVISION_RE.fullmatch(
-            str(source.get("revision", ""))
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("revision"), str)
+            or not _REVISION_RE.fullmatch(source["revision"])
+            or not isinstance(source.get("repository"), str)
+            or manifest["source_repository"] != source["repository"]
+            or manifest["source_revision"] != source["revision"]
         ):
             raise ModelNotInstalledError(f"SpeechScope model manifest in {directory} is invalid")
         if manifest.get("backend") != backend or manifest.get("id") != model_id:
@@ -495,6 +597,37 @@ class ModelStore:
             raise ModelNotInstalledError(f"SpeechScope model manifest in {directory} is invalid")
         return manifest
 
+    @staticmethod
+    def _verify_catalog_metadata(manifest: dict[str, Any], model: dict[str, Any]) -> None:
+        ModelStore._require_managed(model)
+        expected_artifacts = [
+            {
+                "path": _safe_artifact_path(item["path"]).as_posix(),
+                "size": item["size"],
+                "sha256": item["sha256"],
+                "primary": item.get("primary") is True,
+            }
+            for item in model["artifacts"]
+        ]
+        actual_artifacts = [
+            {
+                "path": item["path"],
+                "size": item["size"],
+                "sha256": item["sha256"],
+                "primary": item["primary"],
+            }
+            for item in manifest["artifacts"]
+        ]
+        if (
+            manifest.get("catalog_kind") != "speechscope-model-catalog"
+            or manifest.get("catalog_schema") != 1
+            or manifest.get("source") != model["source"]
+            or actual_artifacts != expected_artifacts
+        ):
+            raise ModelIntegrityError(
+                f"Installed model {model['ref']} manifest does not match the current catalog"
+            )
+
     def installed(self) -> builtins.list[dict[str, Any]]:
         result: builtins.list[dict[str, Any]] = []
         if not self.models_dir.is_dir():
@@ -511,6 +644,7 @@ class ModelStore:
         if isinstance(model, dict):
             self._require_managed(model)
         ref = model if isinstance(model, str) else model["ref"]
+        self.verify(model)
         directory = self._install_dir(ref)
         manifest = self._read_manifest(directory, expected_ref=ref)
         primary = next((a for a in manifest["artifacts"] if a.get("primary") is True), None)
@@ -519,6 +653,13 @@ class ModelStore:
         path = _artifact_file(directory, primary["path"])
         if not path.is_file():
             raise ModelNotInstalledError(f"Primary artifact for {ref} is missing: {path}")
+        try:
+            with path.open("rb") as stream:
+                stream.read(1)
+        except OSError as exc:
+            raise ModelIntegrityError(
+                f"Primary artifact for {ref} is not readable: {path}"
+            ) from exc
         return path
 
     def verify(self, model: dict[str, Any] | str) -> dict[str, Any]:
@@ -527,6 +668,9 @@ class ModelStore:
         ref = model if isinstance(model, str) else model["ref"]
         directory = self._install_dir(ref)
         manifest = self._read_manifest(directory, expected_ref=ref)
+
+        if isinstance(model, dict):
+            self._verify_catalog_metadata(manifest, model)
         results = []
         for artifact in manifest["artifacts"]:
             path = _artifact_file(directory, artifact["path"])
@@ -567,9 +711,14 @@ class ModelManager:
         cache_dir: str | Path | None = None,
         offline: bool = False,
         refresh: bool = False,
+        packaged_catalog: bool = False,
     ):
         self.catalog = ModelCatalogClient(
-            catalog, cache_dir=cache_dir, offline=offline, refresh=refresh
+            catalog,
+            cache_dir=cache_dir,
+            offline=offline,
+            refresh=refresh,
+            packaged=packaged_catalog,
         )
         self.store = ModelStore(cache_dir)
 
@@ -586,12 +735,9 @@ class ModelManager:
         return self.store.installed()
 
     def _installed_selector(self, ref: str, backend: str | None):
-        if ":" in ref:
-            selected_backend = ref.split(":", 1)[0]
-            if backend is not None and selected_backend != backend:
-                raise ModelNotFoundError(f"Model {ref!r} is not in backend {backend!r}")
-            return ref
-        return self.show(ref, backend=backend)
+        model = self.show(ref, backend=backend)
+        ModelStore._require_managed(model)
+        return model
 
     def path(self, ref: str, *, backend: str | None = None) -> Path:
         return self.store.path(self._installed_selector(ref, backend))

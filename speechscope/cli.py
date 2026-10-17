@@ -20,6 +20,8 @@ from .errors import (
     InvalidReferenceError,
     InvalidThresholdPolicyError,
     ModelError,
+    ModelIntegrityError,
+    ModelNotInstalledError,
     TranscriptionError,
     UnsupportedBackendOptionError,
 )
@@ -73,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
     inspect.add_argument("--format", choices=("human", "json"), default="human")
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--backend", default="redux")
+
+    doctor.add_argument("--model")
+    doctor.add_argument("--device", default="cpu")
+    doctor.add_argument("--cache-dir", type=Path)
+    doctor.add_argument("--format", choices=("json", "human"), default="human")
     metrics = commands.add_parser("metrics")
     metrics.add_argument("action", choices=("list",))
     metrics.add_argument("--format", choices=("json", "human"), default="human")
@@ -182,9 +189,10 @@ def _run_models(args) -> int:
                 )
         return 0
     if action == "path":
-        path = manager.path(args.ref, backend=args.backend)
+        model = manager.show(args.ref, backend=args.backend)
+        path = manager.path(model["ref"], backend=args.backend)
         if args.format == "json":
-            _emit({"ref": args.ref, "path": str(path)}, "json")
+            _emit({"ref": model["ref"], "path": str(path)}, "json")
         else:
             print(path)
         return 0
@@ -204,6 +212,126 @@ def _run_models(args) -> int:
             print(f"Removed {model['ref']}")
         return 0
     raise AssertionError(f"Unknown models action: {action}")
+
+
+def _doctor_whispercpp(args, info) -> int:
+    from .backends.whispercpp import probe_executable
+    from .models import ModelManager
+
+    device_supported = args.device in info.supported_devices
+    checks: dict[str, bool | None] = {
+        "device_supported": device_supported,
+        "runtime_available": False,
+        "catalog_model": None,
+        "managed": None,
+        "installed": None,
+        "verified": None,
+        "readable": None,
+    }
+    runtime: dict[str, str | bool | None] = {
+        "executable": "whisper-cli",
+        "available": False,
+        "path": None,
+        "version": None,
+    }
+    model_store: dict[str, bool | str | None] = {
+        "installed": None,
+        "verified": None,
+        "readable": None,
+        "path": None,
+    }
+    errors: list[str] = []
+
+    if not device_supported:
+        supported = ", ".join(info.supported_devices)
+        errors.append(f"whispercpp does not support device {args.device!r}; supported: {supported}")
+    try:
+        executable, version = probe_executable()
+        runtime.update(available=True, path=executable, version=version)
+        checks["runtime_available"] = True
+    except BackendUnavailableError as exc:
+        errors.append(str(exc))
+
+    selected_model = None
+    if args.model:
+        checks.update(
+            catalog_model=False,
+            managed=False,
+            installed=False,
+            verified=False,
+            readable=False,
+        )
+        model_store.update(installed=False, verified=False, readable=False)
+        manager = ModelManager(cache_dir=args.cache_dir, packaged_catalog=True)
+        try:
+            selected_model = manager.show(args.model, backend="whispercpp")
+            checks["catalog_model"] = True
+            managed = selected_model["acquisition"]["mode"] == "managed"
+            checks["managed"] = managed
+            if not managed:
+                errors.append(f"{selected_model['ref']} is not SpeechScope-managed")
+            else:
+                try:
+                    model_path = manager.path(selected_model["ref"], backend="whispercpp")
+                except ModelIntegrityError as exc:
+                    checks.update(installed=True, verified=False, readable=False)
+                    model_store.update(installed=True, verified=False, readable=False)
+                    errors.append(str(exc))
+                except ModelNotInstalledError as exc:
+                    errors.append(str(exc))
+                except ModelError as exc:
+                    errors.append(str(exc))
+                else:
+                    checks.update(installed=True, verified=True, readable=True)
+                    model_store.update(
+                        installed=True,
+                        verified=True,
+                        readable=True,
+                        path=str(model_path),
+                    )
+        except ModelError as exc:
+            errors.append(str(exc))
+        if selected_model is not None:
+            model_store["managed"] = checks["managed"]
+
+    required = [checks["device_supported"], checks["runtime_available"]]
+    if args.model:
+        required.extend(
+            checks[name]
+            for name in ("catalog_model", "managed", "installed", "verified", "readable")
+        )
+    report = {
+        "ok": all(required),
+        "backend": "whispercpp",
+        "device": args.device,
+        "model": selected_model["ref"] if selected_model is not None else args.model,
+        "runtime": runtime,
+        "model_store": model_store,
+        "checks": checks,
+        "errors": errors,
+    }
+    if args.format == "json":
+        _emit(report, "json")
+    else:
+        status = "ready" if report["ok"] else "not ready"
+        print(f"Backend whispercpp: {status} (device={args.device})")
+        if runtime["available"]:
+            version_note = (
+                f" (whisper.cpp {runtime['version']})"
+                if runtime["version"]
+                else " (version unavailable)"
+            )
+            print(f"whisper-cli available{version_note} at {runtime['path']}")
+        if args.model:
+            print(f"Model: {report['model']}")
+            if model_store["verified"]:
+                print(f"Managed model verified at {model_store['path']}")
+            print("Model artifacts are checked locally; no download or inference is performed.")
+        else:
+            print("Model weights are not accessed.")
+        for error in errors:
+            print(f"speechscope: {error}", file=sys.stderr)
+    return 0 if report["ok"] else 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,6 +354,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "doctor":
             info = backend_info(args.backend)
+
+            if info.name == "whispercpp":
+                return _doctor_whispercpp(args, info)
             if info.name == "redux":
                 if info.version is None:
                     raise BackendUnavailableError(
@@ -242,19 +373,6 @@ def main(argv: list[str] | None = None) -> int:
                     f"Backend redux: dependency available (Moondream {info.version}); "
                     "metadata-only preflight, not model/device readiness. "
                     "Photon is not initialized and model weights are not accessed."
-                )
-            elif info.name == "whispercpp":
-                from .backends.whispercpp import probe_executable
-
-                executable, whisper_version = probe_executable()
-                version_note = (
-                    f" (whisper.cpp {whisper_version})"
-                    if whisper_version
-                    else " (version unavailable)"
-                )
-                print(
-                    f"Backend whispercpp: executable available{version_note} at {executable}; "
-                    "metadata-only preflight. Model weights are not accessed."
                 )
             else:
                 print(

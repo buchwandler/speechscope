@@ -12,7 +12,7 @@ import soundfile as sf
 
 from speechscope.backends.whispercpp import EXECUTABLE_ENV
 from speechscope.cli import main
-from speechscope.models import ModelStore
+from speechscope.models import CATALOG_ENV, ModelStore
 
 REVISION = "b" * 40
 WEIGHTS = b"verified model bytes"
@@ -94,11 +94,19 @@ def test_managed_whispercpp_reference_transcribes_without_catalog_or_weight_netw
     tmp_path, monkeypatch
 ):
     model = model_entry()
+
+    monkeypatch.setenv(CATALOG_ENV, "https://catalog.invalid/models.json")
     cache = tmp_path / "cache"
     with patch("speechscope.models.urlopen", return_value=BytesIO(WEIGHTS)):
         installed_path = ModelStore(cache).install(model)
     assert installed_path.read_bytes() == WEIGHTS
 
+    def local_store_path(manager, ref, *, backend=None):
+        assert manager.catalog.catalog is None
+        assert ref == model["ref"]
+        return ModelStore(cache).path(model)
+
+    monkeypatch.setattr("speechscope.models.ModelManager.path", local_store_path)
     args_file = fake_whisper_cli(tmp_path, monkeypatch)
     source = tmp_path / "speech.wav"
     sf.write(
@@ -125,6 +133,9 @@ def test_managed_whispercpp_reference_transcribes_without_catalog_or_weight_netw
     assert argv[argv.index("--model") + 1] == str(installed_path)
     assert report.transcription.model == model["ref"]
     assert report.transcription.text == "hello"
+
+    assert report.transcription.words == ()
+    assert report.transcription.timing_source == "unavailable"
 
 
 def test_models_list_and_show_support_local_catalog_json(tmp_path, capsys):
@@ -157,11 +168,27 @@ def test_managed_models_cli_lifecycle(tmp_path, capsys):
     inventory = json.loads(capsys.readouterr().out)
     assert inventory[0]["ref"] == model["ref"]
 
-    assert main(["models", "path", model["ref"], *common]) == 0
-    model_path = json.loads(capsys.readouterr().out)["path"]
+    assert (
+        main(
+            [
+                "models",
+                "path",
+                model["id"],
+                "--backend",
+                "whispercpp",
+                "--catalog",
+                str(catalog),
+                *common,
+            ]
+        )
+        == 0
+    )
+    path_result = json.loads(capsys.readouterr().out)
+    assert path_result["ref"] == model["ref"]
+    model_path = path_result["path"]
     assert Path(model_path).is_file()
 
-    assert main(["models", "verify", model["ref"], *common]) == 0
+    assert main(["models", "verify", model["ref"], "--catalog", str(catalog), *common]) == 0
     assert json.loads(capsys.readouterr().out)["verified"] is True
 
     assert main(["models", "remove", model["ref"], "--catalog", str(catalog), *common]) == 0

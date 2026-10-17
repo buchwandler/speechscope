@@ -1,0 +1,317 @@
+{
+  "kind": "speechscope-model-catalog",
+  "models": {
+    "redux:parakeet-redux": {
+      "acquisition": {
+        "mode": "runtime-managed",
+        "reason": "Photon is the supported runtime; SpeechScope does not own or remove Photon cache entries.",
+        "runtime_locator": "moondream/parakeet-redux"
+      },
+      "aliases": ["redux", "moondream/parakeet-redux"],
+      "artifacts": [
+        {
+          "filename": "config.json",
+          "path": "config.json",
+          "primary": false,
+          "role": "config",
+          "sha256": null,
+          "size": null,
+          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/config.json?download=true"
+        },
+        {
+          "filename": "model.safetensors",
+          "path": "model.safetensors",
+          "primary": true,
+          "role": "weights",
+          "sha256": "78ec25733ee0d0c1586d1346fc86db9d0c2e436e3a8ab1d32a82d1bb8f848d21",
+          "size": 177774490,
+          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/model.safetensors?download=true"
+        },
+        {
+          "filename": "ternary.json",
+          "path": "ternary.json",
+          "primary": false,
+          "role": "packing",
+          "sha256": null,
+          "size": null,
+          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/ternary.json?download=true"
+        },
+        {
+          "filename": "tokenizer.json",
+          "path": "tokenizer.json",
+          "primary": false,
+          "role": "tokenizer",
+          "sha256": null,
+          "size": null,
+          "url": "https://huggingface.co/moondream/parakeet-redux/resolve/2bf128600aac4b16946f7ed8372e56117fe5e23b/tokenizer.json?download=true"
+        }
+      ],
+      "backend": "redux",
+      "description": "Moondream Parakeet Redux bundle used by the Photon runtime",
+      "format": "photon-parakeet-redux",
+      "id": "parakeet-redux",
+      "kind": "bundle",
+      "languages": [
+        "en",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "ru",
+        "uk",
+        "hr",
+        "sl",
+        "lv",
+        "lt",
+        "et",
+        "fi",
+        "sv",
+        "da",
+        "nl",
+        "pl",
+        "cs",
+        "sk",
+        "hu",
+        "ro",
+        "bg",
+        "el",
+        "mt"
+      ],
+      "ref": "redux:parakeet-redux",
+      "runtime": {
+        "minimum_version": "2.4.1",
+        "model_argument": "moondream/parakeet-redux",
+        "package": "moondream",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "cc-by-4.0",
+        "provider": "huggingface",
+        "repository": "moondream/parakeet-redux",
+        "revision": "2bf128600aac4b16946f7ed8372e56117fe5e23b"
+      }
+    },
+    "whispercpp:base-q5_1": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["base", "base-multilingual"],
+      "artifacts": [
+        {
+          "filename": "ggml-base-q5_1.bin",
+          "path": "ggml-base-q5_1.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+          "size": 59707625,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp base-q5_1 GGML model",
+      "format": "ggml",
+      "id": "base-q5_1",
+      "kind": "model",
+      "languages": ["*"],
+      "ref": "whispercpp:base-q5_1",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_1",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    },
+    "whispercpp:base.en-q5_1": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["base.en", "base-en"],
+      "artifacts": [
+        {
+          "filename": "ggml-base.en-q5_1.bin",
+          "path": "ggml-base.en-q5_1.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
+          "size": 59721011,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en-q5_1.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp base.en-q5_1 GGML model",
+      "format": "ggml",
+      "id": "base.en-q5_1",
+      "kind": "model",
+      "languages": ["en"],
+      "ref": "whispercpp:base.en-q5_1",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_1",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    },
+    "whispercpp:large-v3-turbo-q5_0": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["turbo", "large-v3-turbo"],
+      "artifacts": [
+        {
+          "filename": "ggml-large-v3-turbo-q5_0.bin",
+          "path": "ggml-large-v3-turbo-q5_0.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+          "size": 574041195,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp large-v3-turbo-q5_0 GGML model",
+      "format": "ggml",
+      "id": "large-v3-turbo-q5_0",
+      "kind": "model",
+      "languages": ["*"],
+      "ref": "whispercpp:large-v3-turbo-q5_0",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_0",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    },
+    "whispercpp:small-q5_1": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["small", "small-multilingual"],
+      "artifacts": [
+        {
+          "filename": "ggml-small-q5_1.bin",
+          "path": "ggml-small-q5_1.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+          "size": 190085487,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small-q5_1.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp small-q5_1 GGML model",
+      "format": "ggml",
+      "id": "small-q5_1",
+      "kind": "model",
+      "languages": ["*"],
+      "ref": "whispercpp:small-q5_1",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_1",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    },
+    "whispercpp:tiny-q5_1": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["tiny", "tiny-multilingual"],
+      "artifacts": [
+        {
+          "filename": "ggml-tiny-q5_1.bin",
+          "path": "ggml-tiny-q5_1.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
+          "size": 32152673,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny-q5_1.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp tiny-q5_1 GGML model",
+      "format": "ggml",
+      "id": "tiny-q5_1",
+      "kind": "model",
+      "languages": ["*"],
+      "ref": "whispercpp:tiny-q5_1",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_1",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    },
+    "whispercpp:tiny.en-q5_1": {
+      "acquisition": {
+        "mode": "managed"
+      },
+      "aliases": ["tiny.en", "tiny-en"],
+      "artifacts": [
+        {
+          "filename": "ggml-tiny.en-q5_1.bin",
+          "path": "ggml-tiny.en-q5_1.bin",
+          "primary": true,
+          "role": "model",
+          "sha256": "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b",
+          "size": 32166155,
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en-q5_1.bin?download=true"
+        }
+      ],
+      "backend": "whispercpp",
+      "description": "whisper.cpp tiny.en-q5_1 GGML model",
+      "format": "ggml",
+      "id": "tiny.en-q5_1",
+      "kind": "model",
+      "languages": ["en"],
+      "ref": "whispercpp:tiny.en-q5_1",
+      "runtime": {
+        "executable": "whisper-cli",
+        "model_argument": "primary_artifact",
+        "quantization": "q5_1",
+        "sample_rate_hz": 16000
+      },
+      "source": {
+        "license": "mit",
+        "provider": "huggingface",
+        "repository": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+      }
+    }
+  },
+  "schema": 1,
+  "source": {
+    "model_count": 7,
+    "provider": "huggingface"
+  }
+}
